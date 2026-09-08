@@ -2,9 +2,9 @@ extends Control
 
 @export_file("*.task") var model_path := "res://assets/models/gesture_recognizer.task"
 @export_range(1, 8, 1) var max_hands := 4
-@export_range(0.0, 1.0, 0.05) var pointing_up_confidence := 0.6
+@export_range(0.0, 1.0, 0.05) var pointing_up_confidence := 0.4
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
-@export var show_hand_detection := false
+@export var show_hand_detection := true
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
