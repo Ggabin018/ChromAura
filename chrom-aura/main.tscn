@@ -1,14 +1,17 @@
-[gd_scene format=3 uid="uid://c06a0g02hj54g"]
+[gd_scene format=3 uid="uid://dcrrdsu4pgww1"]
 
 [ext_resource type="Script" uid="uid://bjx75pnkwofvs" path="res://camera_script.gd" id="1_0xm2m"]
+[ext_resource type="Script" uid="uid://deuah7mdfqbj2" path="res://hand_overlay.gd" id="2_overlay"]
 
 [node name="Node" type="Node" unique_id=1008517725]
 
 [node name="Control" type="Control" parent="." unique_id=478387964]
 layout_mode = 3
-anchors_preset = 0
-offset_right = 40.0
-offset_bottom = 40.0
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_0xm2m")
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
@@ -16,21 +19,85 @@ auto_start = true
 device_id = "Kinect v1 (Xbox 360):kinectv1:A00364A11113032A"
 preferred_backend = "kinectv1"
 
+[node name="Background" type="ColorRect" parent="Control" unique_id=432636189]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.035, 0.035, 0.045, 1)
+
 [node name="RGBTexture" type="TextureRect" parent="Control" unique_id=1230097962]
 visible = false
-layout_mode = 0
-offset_left = 558.0
-offset_top = -1.0
-offset_right = 1152.0
-offset_bottom = 312.0
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
 
 [node name="DepthTexture" type="TextureRect" parent="Control" unique_id=971766205]
 visible = false
-layout_mode = 0
-offset_right = 580.0
-offset_bottom = 319.0
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
 
 [node name="OutTexture" type="TextureRect" parent="Control" unique_id=590090608]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="HandOverlay" type="Control" parent="Control" unique_id=1832512813]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_overlay")
+
+[node name="Status" type="Label" parent="Control" unique_id=233315698]
 layout_mode = 0
-offset_right = 1132.0
-offset_bottom = 638.0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 730.0
+offset_bottom = 54.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.85)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 20
+text = "Initializing Kinect & MediaPipe..."
+
+[node name="GestureStatus" type="Label" parent="Control" unique_id=700504259]
+visible = false
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -500.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 58.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.2, 1, 0.45, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 24
+text = "Pointing Up detected"
+horizontal_alignment = 2
