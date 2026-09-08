@@ -3,40 +3,38 @@ extends Control
 @export_file("*.task") var model_path := "res://assets/models/gesture_recognizer.task"
 @export_range(1, 8, 1) var max_hands := 4
 @export_range(0.0, 1.0, 0.05) var pointing_up_confidence := 0.6
-@export var depth_threshold := 0.65
+@export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
+@export var show_hand_detection := false
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
-@onready var rgb_texture: TextureRect = $RGBTexture
-@onready var depth_texture: TextureRect = $DepthTexture
-@onready var out_texture: TextureRect = $OutTexture
-@onready var hand_overlay: HandOverlay = $HandOverlay
+@onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
 @onready var status_label: Label = $Status
 @onready var gesture_status_label: Label = $GestureStatus
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
 var _last_timestamp_ms := 0
+var _rgb_frame_size := Vector2i(640, 480)
 
 
 func _ready() -> void:
-	# Connect Kinect depth camera signals
 	depth_camera.rgb_frame_ready.connect(_on_rgb_frame)
 	depth_camera.depth_frame_ready.connect(_on_depth_frame)
 
-	# Configure Kinect settings
-	depth_camera.min_depth = 0.5   # meters
-	depth_camera.max_depth = 3.0   # meters
+	depth_camera.min_depth = 0.5
+	depth_camera.max_depth = 3.0
 	depth_camera.auto_reconnect = true
 
-	# Initialize MediaPipe gesture recognizer for hand detection
+	hand_overlay.visible = show_hand_detection
+	status_label.visible = show_hand_detection
+	gesture_status_label.visible = false
+
 	if _initialize_gesture_recognizer():
 		_set_status("Kinect & MediaPipe Initialized.")
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
-	# Start Kinect stream
 	depth_camera.start_streaming()
-	print("Kinect Camera is READY")
 
 
 func _exit_tree() -> void:
@@ -70,27 +68,19 @@ func _initialize_gesture_recognizer() -> bool:
 
 
 func _on_rgb_frame(image_texture: ImageTexture) -> void:
-	if image_texture == null:
+	if image_texture == null or _recognition_pending or _gesture_recognizer == null:
 		return
-
-	rgb_texture.texture = image_texture
-
-	if _recognition_pending or _gesture_recognizer == null:
-		return
-
-	_recognition_pending = true
 
 	var image := image_texture.get_image()
 	if image == null or image.is_empty():
-		_recognition_pending = false
 		return
-
 	if image.get_format() != Image.FORMAT_RGB8:
 		image.convert(Image.FORMAT_RGB8)
 
+	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
+	_recognition_pending = true
 	var media_pipe_image := MediaPipeImage.new()
 	media_pipe_image.set_image(image)
-
 	var timestamp_ms := maxi(Time.get_ticks_msec(), _last_timestamp_ms + 1)
 	_last_timestamp_ms = timestamp_ms
 	_gesture_recognizer.recognize_async(media_pipe_image, timestamp_ms)
@@ -108,8 +98,7 @@ func _on_gesture_result(
 			points.append(Vector2(landmark.x, landmark.y))
 		hands.append(points)
 
-	var pointing_up_score := _get_pointing_up_score(result)
-	_apply_gesture_result.call_deferred(hands, pointing_up_score)
+	_apply_gesture_result.call_deferred(hands, _get_pointing_up_score(result))
 
 
 func _get_pointing_up_score(result: MediaPipeGestureRecognizerResult) -> float:
@@ -127,45 +116,37 @@ func _apply_gesture_result(
 ) -> void:
 	_recognition_pending = false
 
-	if hand_overlay:
-		var frame_size := Vector2i(640, 480)
-		if rgb_texture.texture:
-			frame_size = Vector2i(rgb_texture.texture.get_width(), rgb_texture.texture.get_height())
-		elif out_texture.texture:
-			frame_size = Vector2i(out_texture.texture.get_width(), out_texture.texture.get_height())
-		hand_overlay.show_hands(hands, frame_size)
-
-	if gesture_status_label:
+	if show_hand_detection:
+		hand_overlay.show_hands(hands, _rgb_frame_size)
 		gesture_status_label.visible = pointing_up_score >= pointing_up_confidence
 		if gesture_status_label.visible:
 			gesture_status_label.text = "Pointing Up detected (%.0f%%)" % (pointing_up_score * 100.0)
+	else:
+		gesture_status_label.visible = false
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
 	if image_texture == null:
 		return
 
-	depth_texture.texture = image_texture
-
-	var tmp := image_texture.get_image()
-	if tmp == null or tmp.is_empty():
+	var source := image_texture.get_image()
+	if source == null or source.is_empty():
 		return
 
-	var img := Image.create(image_texture.get_width(), image_texture.get_height(), false, Image.FORMAT_RGB8)
+	var width := source.get_width()
+	var height := source.get_height()
+	var depth_mask := Image.create(width, height, false, Image.FORMAT_RGB8)
+	for y in range(height):
+		for x in range(width):
+			var depth := source.get_pixel(x, y).r
+			if depth >= depth_threshold:
+				depth_mask.set_pixel(x, y, Color(depth, 0, 0, 1))
 
-	for y in range(img.get_height()):
-		for x in range(img.get_width()):
-			var pixel_color: Color = tmp.get_pixel(x, y)
-			if pixel_color.r < depth_threshold:
-				img.set_pixel(x, y, Color(0, 0, 0, 1))
-			else:
-				img.set_pixel(x, y, Color.from_hsv((0.1 + (pixel_color.r * 8.0) / depth_threshold), 1.0, 1.0))
-
-	out_texture.texture = ImageTexture.create_from_image(img)
+	$Particles.SetDepthImageMask(depth_mask)
 
 
 func _set_status(message: String) -> void:
-	if status_label:
+	if show_hand_detection:
 		status_label.text = message
 
 
