@@ -1,0 +1,28 @@
+[configuration]
+
+entry_symbol = "godot_depthcam_library_init"
+compatibility_minimum = 4.2
+
+[libraries]
+
+linux.debug.x86_64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.linux.template_release.x86_64.so"
+linux.release.x86_64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.linux.template_release.x86_64.so"
+linux.debug.arm64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.linux.template_release.arm64.so"
+linux.release.arm64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.linux.template_release.arm64.so"
+windows.debug.x86_64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://addons/gd-depthcam/bin/libgodot-depthcam.windows.template_release.x86_64.dll"
+macos.debug = "res://addons/gd-depthcam/bin/libgodot-depthcam.macos.template_debug.universal.dylib"
+macos.release = "res://addons/gd-depthcam/bin/libgodot-depthcam.macos.template_release.universal.dylib"
+
+[dependencies]
+
+linux.debug.x86_64 = {}
+linux.release.x86_64 = {}
+linux.debug.arm64 = {}
+linux.release.arm64 = {}
+windows.debug.x86_64 = {}
+windows.release.x86_64 = {}
+macos.debug.x86_64 = {}
+macos.release.x86_64 = {}
+macos.debug.arm64 = {}
+macos.release.arm64 = {}

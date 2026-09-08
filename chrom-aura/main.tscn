@@ -1,0 +1,36 @@
+[gd_scene format=3 uid="uid://c06a0g02hj54g"]
+
+[ext_resource type="Script" uid="uid://bjx75pnkwofvs" path="res://camera_script.gd" id="1_0xm2m"]
+
+[node name="Node" type="Node" unique_id=1008517725]
+
+[node name="Control" type="Control" parent="." unique_id=478387964]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("1_0xm2m")
+
+[node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
+auto_start = true
+device_id = "Kinect v1 (Xbox 360):kinectv1:A00364A11113032A"
+preferred_backend = "kinectv1"
+
+[node name="RGBTexture" type="TextureRect" parent="Control" unique_id=1230097962]
+visible = false
+layout_mode = 0
+offset_left = 558.0
+offset_top = -1.0
+offset_right = 1152.0
+offset_bottom = 312.0
+
+[node name="DepthTexture" type="TextureRect" parent="Control" unique_id=971766205]
+visible = false
+layout_mode = 0
+offset_right = 580.0
+offset_bottom = 319.0
+
+[node name="OutTexture" type="TextureRect" parent="Control" unique_id=590090608]
+layout_mode = 0
+offset_right = 1132.0
+offset_bottom = 638.0

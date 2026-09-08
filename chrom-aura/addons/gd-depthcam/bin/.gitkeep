@@ -1,0 +1,8 @@
+# This file ensures the bin/ directory exists in git.
+# Build the native library with:
+#   cd addons/gd-depthcam && scons platform=<your-platform> arch=<your-arch>
+#
+# Example for macOS Apple Silicon:
+#   scons platform=macos arch=arm64 -j8
+#
+# See README.md for full build instructions.
