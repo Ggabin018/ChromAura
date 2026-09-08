@@ -13,7 +13,7 @@ script = ExtResource("1_0xm2m")
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
 auto_start = true
-device_id = "Kinect v1 (Xbox 360):kinectv1:A00364A11113032A"
+device_id = "Simulation Device:simulation:0"
 preferred_backend = "kinectv1"
 
 [node name="RGBTexture" type="TextureRect" parent="Control" unique_id=1230097962]

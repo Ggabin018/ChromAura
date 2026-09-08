@@ -15,12 +15,19 @@ func _ready():
 	# Start streaming (or enable auto_start in inspector)
 	depth_camera.start_streaming()
 	print("Camera is READY")
+	
+func get_depth_color(col_min: Color, col_max: Color, depth: float) -> Color:
+	var t = clamp(depth, 0.0, 1.0)
+	return col_max.lerp(col_min, t)
 
 func _on_rgb_frame(image: ImageTexture):
 	$RGBTexture.texture = image
 
 func _on_depth_frame(image: ImageTexture):
 	$DepthTexture.texture = image
+	
+	var w = image.get_width()
+	var h = image.get_height()
 	
 	var img: Image = Image.create(image.get_width(), image.get_height(), false, Image.FORMAT_RGB8)
 	
@@ -29,16 +36,20 @@ func _on_depth_frame(image: ImageTexture):
 	var threshold = 0.65
 	
 	# 2. Iterate through every pixel
-	for y in range(img.get_height()):
-		for x in range(img.get_width()):
-			var pixel_color: Color = tmp.get_pixel(x, y)
-			
+	for y in range(h):
+		for x in range(w):
+			var input_color: Color = tmp.get_pixel(x, y)
+	
 			# Check your condition (e.g., Red channel value)
-			if pixel_color.r < threshold:
-				# Erase the pixel by changing it to full transparency
-				img.set_pixel(x, y, Color(0, 0, 0, 1))
-			else:
-				img.set_pixel(x, y, 
-				Color.from_hsv((0.1 + (pixel_color.r * 8) / threshold), 1, 1))
-				
+			if input_color.r < threshold:
+				img.set_pixel(w - x, y, Color(0, 0, 0, 1))
+			else: 
+				var normalized = inverse_lerp(0.65, 1.0, input_color.r)
+				var output_color = get_depth_color(
+					Color8(180, 250, 255),
+					Color8(110, 20, 220),
+					normalized
+				)
+				img.set_pixel(w - x, y, output_color)
+	
 	$OutTexture.texture = ImageTexture.create_from_image(img)
