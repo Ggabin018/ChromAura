@@ -78,6 +78,25 @@ theme_override_constants/shadow_offset_y = 2
 theme_override_font_sizes/font_size = 20
 text = "Initializing Kinect & MediaPipe..."
 
+[node name="BodyStatus" type="RichTextLabel" parent="Control" unique_id=987123456]
+visible = false
+layout_mode = 0
+offset_left = 16.0
+offset_top = 56.0
+offset_right = 850.0
+offset_bottom = 120.0
+mouse_filter = 2
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/normal_font_size = 18
+theme_override_font_sizes/bold_font_size = 20
+bbcode_enabled = true
+text = "[b]👤 Corps détectés : 0[/b]"
+fit_content = true
+scroll_active = false
+autowrap_mode = 0
+
 [node name="GestureStatus" type="Label" parent="Control" unique_id=700504259]
 visible = false
 layout_mode = 1
