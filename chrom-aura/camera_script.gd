@@ -11,11 +11,38 @@ extends Control
 @onready var status_label: Label = $Status
 @onready var gesture_status_label: Label = $GestureStatus
 
+@export_range(0.0, 1.0, 0.01)
+var depth_min_for_color := 0.65
+
+@export_range(0.0, 1.0, 0.01)
+var depth_max_for_color := 1.0
+
+@export var depth_color_min := Color8(180, 250, 255)
+@export var depth_color_max := Color8(110, 20, 220)
+
+@export var mirror_depth := true
+
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 
+func normalize_depth(depth: float) -> float:
+	var normalized := inverse_lerp(
+		depth_min_for_color,
+		depth_max_for_color,
+		depth
+	)
+	
+	return clamp(normalized, 0.0, 1.0)
+
+func get_depth_color(normalized_depth: float) -> Color:
+	var t = clamp(normalized_depth, 0.0, 1.0)
+	
+	return depth_color_min.lerp(
+		depth_color_max,
+		t
+	)
 
 func _ready() -> void:
 	depth_camera.rgb_frame_ready.connect(_on_rgb_frame)
@@ -35,41 +62,6 @@ func _ready() -> void:
 		_set_status("Kinect started (MediaPipe failed).")
 
 	depth_camera.start_streaming()
-
-func get_depth_color(col_min: Color, col_max: Color, depth: float) -> Color:
-	var t = clamp(depth, 0.0, 1.0)
-	return col_max.lerp(col_min, t)
-
-func _on_depth_frame(image: ImageTexture):
-	$DepthTexture.texture = image
-	
-	var w = image.get_width()
-	var h = image.get_height()
-	
-	var img: Image = Image.create(image.get_width(), image.get_height(), false, Image.FORMAT_RGB8)
-	
-	var tmp = image.get_image()
-	
-	var threshold = 0.65
-	
-	# 2. Iterate through every pixel
-	for y in range(h):
-		for x in range(w):
-			var input_color: Color = tmp.get_pixel(x, y)
-	
-			# Check your condition (e.g., Red channel value)
-			if input_color.r < threshold:
-				img.set_pixel(w - x, y, Color(0, 0, 0, 1))
-			else: 
-				var normalized = inverse_lerp(0.65, 1.0, input_color.r)
-				var output_color = get_depth_color(
-					Color8(180, 250, 255),
-					Color8(110, 20, 220),
-					normalized
-				)
-				img.set_pixel(w - x, y, output_color)
-	
-	$OutTexture.texture = ImageTexture.create_from_image(img)
 
 func _exit_tree() -> void:
 	if depth_camera:
@@ -110,6 +102,7 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 		return
 	if image.get_format() != Image.FORMAT_RGB8:
 		image.convert(Image.FORMAT_RGB8)
+	image.flip_x()
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
 	_recognition_pending = true
@@ -133,7 +126,6 @@ func _on_gesture_result(
 
 	_apply_gesture_result.call_deferred(hands, _get_pointing_up_score(result))
 
-
 func _get_pointing_up_score(result: MediaPipeGestureRecognizerResult) -> float:
 	var best_score := 0.0
 	for gesture in result.gestures:
@@ -156,6 +148,37 @@ func _apply_gesture_result(
 	else:
 		gesture_status_label.visible = false
 
+#func _on_depth_frame(image: ImageTexture):
+	#$DepthTexture.texture = image
+	#
+	#var w = image.get_width()
+	#var h = image.get_height()
+	#
+	#var img: Image = Image.create(image.get_width(), image.get_height(), false, Image.FORMAT_RGB8)
+	#
+	#var tmp = image.get_image()
+	#
+	#var threshold = 0.65
+	#
+	## 2. Iterate through every pixel
+	#for y in range(h):
+		#for x in range(w):
+			#var input_color: Color = tmp.get_pixel(x, y)
+	#
+			## Check your condition (e.g., Red channel value)
+			#if input_color.r < threshold:
+				#img.set_pixel(w - x, y, Color(0, 0, 0, 1))
+			#else: 
+				#var normalized = inverse_lerp(0.65, 1.0, input_color.r)
+				#var output_color = get_depth_color(
+					#Color8(180, 250, 255),
+					#Color8(110, 20, 220),
+					#normalized
+				#)
+				#img.set_pixel(w - x, y, output_color)
+	#
+	#$OutTexture.texture = ImageTexture.create_from_image(img)
+
 func _on_depth_frame(image_texture: ImageTexture) -> void:
 	if image_texture == null:
 		return
@@ -169,9 +192,10 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 	var depth_mask := Image.create(width, height, false, Image.FORMAT_RGB8)
 	for y in range(height):
 		for x in range(width):
-			var depth := source.get_pixel(x, y).r
-			if depth >= depth_threshold:
-				depth_mask.set_pixel(x, y, Color(depth, 0, 0, 1))
+			var raw_depth := source.get_pixel(x, y).r
+			if raw_depth >= depth_threshold:
+				var normalized_depth = normalize_depth(raw_depth)
+				depth_mask.set_pixel(width - 1 - x, y, Color(normalized_depth, 0, 0, 1))
 
 	$Particles.SetDepthImageMask(depth_mask)
 

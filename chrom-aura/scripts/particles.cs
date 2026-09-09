@@ -4,6 +4,14 @@ using System.Collections.Generic;
 
 public partial class particles : CanvasLayer
 {
+	[Export]
+	public Color ParticleColorAtMinDepth { get; set; } =
+		new Color(180.0f / 255.0f, 250.0f / 255.0f, 255.0f / 255.0f, 0.95f);
+	
+	[Export]
+	public Color ParticleColorAtMaxDepth { get; set; } =
+		new Color(110.0f / 255.0f, 20.0f / 255.0f, 220.0f / 255.0f, 0.95f);
+	
 	private const int ParticlesPerSecond = 3200;
 	private const int MaxParticles = 5000;
 	private const float ParticleLifetime = 0.2f;
@@ -61,10 +69,75 @@ public partial class particles : CanvasLayer
 			}
 		}
 	}
+	
+	private ShaderMaterial CreateParticleShaderMaterial()
+	{
+		var shader = new Shader
+		{
+			Code = @"
+shader_type particles;
+
+uniform float damping_min = 2.0;
+uniform float damping_max = 5.0;
+uniform float scale_min = 0.55;
+uniform float scale_max = 1.25;
+
+float rand(float seed)
+{
+    return fract(sin(seed * 12.9898) * 43758.5453);
+}
+
+void start()
+{
+    // Damping aléatoire par particule, stocké dans un canal
+    // CUSTOM libre (on garde CUSTOM.r pour la profondeur)
+    float r1 = rand(float(INDEX) + TIME);
+    CUSTOM.g = mix(damping_min, damping_max, r1);
+
+    // Scale aléatoire appliqué une fois, à l'émission
+    float r2 = rand(float(INDEX) * 1.37 + TIME);
+    float s = mix(scale_min, scale_max, r2);
+    TRANSFORM[0].xy *= s;
+    TRANSFORM[1].xy *= s;
+
+    // On NE TOUCHE PAS à COLOR ni CUSTOM.r ici :
+    // ils ont déjà été fixés par EmitParticle() côté C#.
+}
+
+void process()
+{
+    // Gravité nulle : rien à ajouter à VELOCITY.
+
+    // Damping exponentiel (équivalent DampingMin/Max de ParticleProcessMaterial)
+    float damping = CUSTOM.g;
+    VELOCITY *= exp(-damping * DELTA);
+
+    // Toujours rien touché sur COLOR / CUSTOM.r ici.
+}
+"
+		};
+
+		var material = new ShaderMaterial
+		{
+			Shader = shader
+		};
+
+		material.SetShaderParameter(
+			"color_at_min_depth",
+			ParticleColorAtMinDepth
+		);
+
+		material.SetShaderParameter(
+			"color_at_max_depth",
+			ParticleColorAtMaxDepth
+		);
+
+		return material;
+	}
 
 	private GpuParticles2D CreateParticleSystem()
 	{
-		var material = new ParticleProcessMaterial
+		var particleMaterial = new ParticleProcessMaterial
 		{
 			ParticleFlagDisableZ = true,
 			Gravity = Vector3.Zero,
@@ -74,19 +147,20 @@ public partial class particles : CanvasLayer
 			DampingMax = 5.0f,
 			ScaleMin = 0.55f,
 			ScaleMax = 1.25f,
-			Color = Colors.White,
 		};
-
-		return new GpuParticles2D
+		
+		var particleSystem = new GpuParticles2D
 		{
 			Amount = MaxParticles,
 			Lifetime = ParticleLifetime,
 			LocalCoords = false,
 			Emitting = false,
 			Texture = CreateSoftParticleTexture(20),
-			ProcessMaterial = material,
+			ProcessMaterial = particleMaterial,
 			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
 		};
+
+		return particleSystem;
 	}
 
 	private void EmitSampledParticle()
@@ -103,13 +177,44 @@ public partial class particles : CanvasLayer
 			? (viewport.Y - _maskSize.Y * scale) * 0.5f + sample.Position.Y * scale
 			: sample.Position.Y * scaleY;
 		var drift = new Vector2(_random.RandfRange(-9f, 9f), _random.RandfRange(-12f, 4f));
-		var color = ColorFromDepth
-			? new Color(0.2f, 0.95f, 1.0f, 0.95f).Lerp(new Color(0.85f, 0.25f, 1.0f, 0.95f), sample.NormalizedDepth)
-			: new Color(0.18f, 0.82f, 1.0f, 0.92f);
+		
+		var particleColor = ParticleColorAtMaxDepth.Lerp(
+			ParticleColorAtMinDepth,
+			sample.NormalizedDepth
+		);
+		var particleMaterial = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = Vector3.Zero,
+			InitialVelocityMin = 0.0f,
+			InitialVelocityMax = 0.0f,
+			DampingMin = 2.0f,
+			DampingMax = 5.0f,
+			ScaleMin = 0.55f,
+			ScaleMax = 1.25f,
+			Color = particleColor,
+		};
+		
+		_particleSystem.ProcessMaterial = particleMaterial;
+
+		var customData = new Color(
+			0.0f,
+			0.0f,
+			0.0f,
+			ParticleLifetime
+		);
+
 		_particleSystem.EmitParticle(
-			new Transform2D(0.0f, new Vector2(x, y)), drift,
-			color, Colors.White,
-			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
+			new Transform2D(0.0f, new Vector2(x, y)),
+			drift,
+			particleColor,
+			Colors.White,
+			(uint)(
+				GpuParticles2D.EmitFlags.Position |
+				GpuParticles2D.EmitFlags.Velocity |
+				GpuParticles2D.EmitFlags.Color
+			)
+		);
 	}
 
 	private static ImageTexture CreateSoftParticleTexture(int size)
