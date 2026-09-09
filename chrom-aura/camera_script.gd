@@ -4,7 +4,6 @@ extends Control
 @export_range(1, 8, 1) var max_hands := 4
 @export_range(0.0, 1.0, 0.05) var pointing_up_confidence := 0.4
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
-@export var show_hand_detection := true
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
@@ -13,10 +12,12 @@ extends Control
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 
+
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
+var dev_mode_toggled := false
 
 
 func _ready() -> void:
@@ -27,9 +28,10 @@ func _ready() -> void:
 	depth_camera.max_depth = 3.0
 	depth_camera.auto_reconnect = true
 
-	hand_overlay.visible = show_hand_detection
-	status_label.visible = show_hand_detection
+	hand_overlay.visible = false
+	status_label.visible = false
 	gesture_status_label.visible = false
+	set_process_input(true)
 
 	if _initialize_gesture_recognizer():
 		_set_status("")
@@ -37,6 +39,19 @@ func _ready() -> void:
 		_set_status("Kinect started (MediaPipe failed).")
 
 	depth_camera.start_streaming()
+
+func _input(event: InputEvent) -> void:
+	if (event.is_action_pressed("dev-mode-toggle")):
+		if (dev_mode_toggled):
+			$HandDetectionLayer/HandOverlay.hide()
+			$Status.hide()
+			$GestureStatus.hide()
+			dev_mode_toggled = false
+		else:
+			$HandDetectionLayer/HandOverlay.show()
+			$Status.show()
+			$GestureStatus.show()
+			dev_mode_toggled = true
 
 
 func _exit_tree() -> void:
@@ -133,10 +148,10 @@ func _apply_gesture_result(
 
 	_update_draw_instruction(is_pointing)
 
-	if show_hand_detection:
+	if dev_mode_toggled:
 		hand_overlay.show_hands(hands, _rgb_frame_size)
 		gesture_status_label.visible = is_pointing
-		if gesture_status_label.visible:
+		if dev_mode_toggled:
 			gesture_status_label.text = "Pointing Up detected (%.0f%%)" % (pointing_up_score * 100.0)
 	else:
 		gesture_status_label.visible = false
@@ -172,7 +187,7 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 
 
 func _set_status(message: String) -> void:
-	if show_hand_detection:
+	if dev_mode_toggled:
 		status_label.text = message
 
 
