@@ -31,13 +31,13 @@ public partial class particles : CanvasLayer
 	/// <summary>Nombre de particules de silhouette émises par seconde.</summary>
 	[Export] public int ParticlesPerSecond { get; set; } = 38000;
 
-	/// <summary>Capacité maximale du pool global de brume.</summary>
+	/// <summary>Capacité maximale du pool de brume pour une palette.</summary>
 	[Export] public int MaxMistParticles { get; set; } = 35000;
 
-	/// <summary>Capacité maximale du pool global de scintillements.</summary>
+	/// <summary>Capacité maximale du pool de scintillements pour une palette.</summary>
 	[Export] public int MaxSparkleParticles { get; set; } = 30000;
 
-	/// <summary>Capacité maximale du pool de particules de tracé par système.</summary>
+	/// <summary>Capacité maximale du pool de tracé pour une palette.</summary>
 	[Export] public int MaxTrailParticles { get; set; } = 25000;
 
 	[ExportGroup("Détection et Interaction")]
@@ -99,10 +99,11 @@ public partial class particles : CanvasLayer
 	private readonly List<Vector2> _prevFingerScreenPos = new();
 	private readonly RandomNumberGenerator _random = new();
 
-	// Un seul pipeline visuel. La palette est portée par chaque particule à l'émission.
-	private GpuParticles2D _mistParticleSystem = null!;
-	private GpuParticles2D _sparkleParticleSystem = null!;
-	private GpuParticles2D _trailParticleSystem = null!;
+	// Un seul pipeline visuel brume/scintillement/tracé, décliné par palette pour que
+	// la couleur soit appliquée par le matériau GPU en plus de la couleur d'émission.
+	private readonly GpuParticles2D[] _mistParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
+	private readonly GpuParticles2D[] _sparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
+	private readonly GpuParticles2D[] _trailParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
 	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
@@ -120,14 +121,18 @@ public partial class particles : CanvasLayer
 	{
 		_random.Randomize();
 
-		_mistParticleSystem = CreateMistParticleSystem();
-		AddChild(_mistParticleSystem);
+		var palettes = BodyPalette.DefaultPalettes;
+		for (var i = 0; i < palettes.Length; i++)
+		{
+			_mistParticleSystems[i] = CreateMistParticleSystem(palettes[i]);
+			AddChild(_mistParticleSystems[i]);
 
-		_sparkleParticleSystem = CreateSparkleParticleSystem();
-		AddChild(_sparkleParticleSystem);
+			_sparkleParticleSystems[i] = CreateSparkleParticleSystem(palettes[i]);
+			AddChild(_sparkleParticleSystems[i]);
 
-		_trailParticleSystem = CreateTrailParticleSystem();
-		AddChild(_trailParticleSystem);
+			_trailParticleSystems[i] = CreateTrailParticleSystem(palettes[i]);
+			AddChild(_trailParticleSystems[i]);
+		}
 
 		// Initialisation de l'overlay de débug séparé
 		_debugOverlay = new BodyDebugOverlay();
@@ -327,10 +332,12 @@ public partial class particles : CanvasLayer
 				? palette.EvaluateTrail(_random.Randf())
 				: bodyColor;
 			var sparkleColor = BoostColor(
-				colorSource.Lerp(Colors.White, _random.RandfRange(0.18f, 0.62f)),
+				colorSource.Lerp(Colors.White, _random.RandfRange(0.08f, 0.28f)),
 				0.98f
 			);
-			var targetSystem = isNearPointingHand ? _trailParticleSystem : _sparkleParticleSystem;
+			var targetSystem = isNearPointingHand
+				? _trailParticleSystems[paletteIndex]
+				: _sparkleParticleSystems[paletteIndex];
 
 			targetSystem.EmitParticle(
 				new Transform2D(0.0f, screenPos + RandomOffset(1.0f)),
@@ -352,7 +359,7 @@ public partial class particles : CanvasLayer
 			_random.RandfRange(-1.5f, 0.4f)
 		);
 
-		_mistParticleSystem.EmitParticle(
+		_mistParticleSystems[paletteIndex].EmitParticle(
 			new Transform2D(0.0f, screenPos + RandomOffset(0.8f)),
 			mistDrift,
 			mistColor,
@@ -396,14 +403,14 @@ public partial class particles : CanvasLayer
 				{
 					var t = (float)s / steps;
 					var center = prevScreen.Lerp(currentScreen, t);
-					EmitSingleTrailParticle(center, palette);
+					EmitSingleTrailParticle(center, paletteIndex, palette);
 				}
 			}
 			else
 			{
 				for (var s = 0; s < 5; s++)
 				{
-					EmitSingleTrailParticle(currentScreen, palette);
+					EmitSingleTrailParticle(currentScreen, paletteIndex, palette);
 				}
 			}
 
@@ -414,7 +421,7 @@ public partial class particles : CanvasLayer
 	/// <summary>
 	/// Émet une particule de tracé unique avec la palette du corps associé.
 	/// </summary>
-	private void EmitSingleTrailParticle(Vector2 basePosition, BodyPalette palette)
+	private void EmitSingleTrailParticle(Vector2 basePosition, int paletteIndex, BodyPalette palette)
 	{
 		var offset = new Vector2(
 			_random.RandfRange(-2.0f, 2.0f),
@@ -427,7 +434,7 @@ public partial class particles : CanvasLayer
 
 		var color = BoostColor(palette.EvaluateTrail(_random.Randf()), 0.90f);
 
-		_trailParticleSystem.EmitParticle(
+		_trailParticleSystems[paletteIndex].EmitParticle(
 			new Transform2D(0.0f, basePosition + offset),
 			drift,
 			color,
@@ -488,9 +495,9 @@ public partial class particles : CanvasLayer
 	// =========================================================================
 
 	/// <summary>
-	/// Crée le système de brume douce utilisé par toutes les palettes.
+	/// Crée le système de brume douce d'une palette de corps.
 	/// </summary>
-	private GpuParticles2D CreateMistParticleSystem()
+	private GpuParticles2D CreateMistParticleSystem(BodyPalette palette)
 	{
 		var alphaCurve = new Curve();
 		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
@@ -502,6 +509,11 @@ public partial class particles : CanvasLayer
 		scaleCurve.AddPoint(new Vector2(0.0f, 0.35f));
 		scaleCurve.AddPoint(new Vector2(0.3f, 0.6f));
 		scaleCurve.AddPoint(new Vector2(1.0f, 0.25f));
+
+		var colorRamp = new Gradient();
+		colorRamp.SetColor(0, Opaque(palette.ColorFar));
+		colorRamp.AddPoint(0.45f, Opaque(palette.ColorNear));
+		colorRamp.AddPoint(1.0f, Opaque(palette.ColorFar));
 
 		var processMat = new ParticleProcessMaterial
 		{
@@ -515,7 +527,8 @@ public partial class particles : CanvasLayer
 			ScaleMax = 0.48f,
 			ScaleCurve = new CurveTexture { Curve = scaleCurve },
 			AlphaCurve = new CurveTexture { Curve = alphaCurve },
-			Color = Colors.White,
+			ColorRamp = new GradientTexture1D { Gradient = colorRamp },
+			Color = Opaque(palette.ColorNear),
 		};
 
 		return new GpuParticles2D
@@ -532,9 +545,9 @@ public partial class particles : CanvasLayer
 	}
 
 	/// <summary>
-	/// Crée le système de scintillements en forme d'étoile utilisé par toutes les palettes.
+	/// Crée le système de scintillements en forme d'étoile d'une palette de corps.
 	/// </summary>
-	private GpuParticles2D CreateSparkleParticleSystem()
+	private GpuParticles2D CreateSparkleParticleSystem(BodyPalette palette)
 	{
 		var alphaCurve = new Curve();
 		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
@@ -548,6 +561,11 @@ public partial class particles : CanvasLayer
 		scaleCurve.AddPoint(new Vector2(0.60f, 0.7f));
 		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
 
+		var colorRamp = new Gradient();
+		colorRamp.SetColor(0, Opaque(palette.ColorNear));
+		colorRamp.AddPoint(0.45f, Opaque(palette.ColorNear.Lerp(Colors.White, 0.22f)));
+		colorRamp.AddPoint(1.0f, Opaque(palette.ColorFar));
+
 		var processMat = new ParticleProcessMaterial
 		{
 			ParticleFlagDisableZ = true,
@@ -560,7 +578,8 @@ public partial class particles : CanvasLayer
 			ScaleMax = 0.65f,
 			ScaleCurve = new CurveTexture { Curve = scaleCurve },
 			AlphaCurve = new CurveTexture { Curve = alphaCurve },
-			Color = Colors.White,
+			ColorRamp = new GradientTexture1D { Gradient = colorRamp },
+			Color = Opaque(palette.ColorNear),
 		};
 
 		return new GpuParticles2D
@@ -577,15 +596,15 @@ public partial class particles : CanvasLayer
 	}
 
 	/// <summary>
-	/// Crée le système de tracé persistant. Son dégradé blanc conserve la couleur émise.
+	/// Crée le système de tracé persistant d'une palette de corps.
 	/// </summary>
-	private GpuParticles2D CreateTrailParticleSystem()
+	private GpuParticles2D CreateTrailParticleSystem(BodyPalette palette)
 	{
 		var gradient = new Gradient();
-		gradient.SetColor(0, new Color(1, 1, 1, 0.95f));
-		gradient.AddPoint(0.4f, new Color(1, 1, 1, 0.85f));
-		gradient.AddPoint(0.8f, new Color(1, 1, 1, 0.45f));
-		gradient.AddPoint(1.0f, new Color(1, 1, 1, 0.0f));
+		gradient.SetColor(0, WithAlpha(palette.TrailStart, 0.95f));
+		gradient.AddPoint(0.4f, WithAlpha(palette.TrailStart, 0.85f));
+		gradient.AddPoint(0.8f, WithAlpha(palette.TrailEnd, 0.45f));
+		gradient.AddPoint(1.0f, WithAlpha(palette.TrailEnd, 0.0f));
 
 		var scaleCurve = new Curve();
 		scaleCurve.AddPoint(new Vector2(0.0f, 0.3f));
@@ -605,7 +624,7 @@ public partial class particles : CanvasLayer
 			ScaleMax = 0.55f,
 			ScaleCurve = new CurveTexture { Curve = scaleCurve },
 			ColorRamp = new GradientTexture1D { Gradient = gradient },
-			Color = Colors.White,
+			Color = Opaque(palette.TrailStart),
 		};
 
 		return new GpuParticles2D
@@ -631,6 +650,16 @@ public partial class particles : CanvasLayer
 			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
 			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
 		};
+	}
+
+	private static Color Opaque(Color color)
+	{
+		return WithAlpha(color, 1.0f);
+	}
+
+	private static Color WithAlpha(Color color, float alpha)
+	{
+		return new Color(color.R, color.G, color.B, alpha);
 	}
 
 	private static ImageTexture CreateMistTexture(int size)
