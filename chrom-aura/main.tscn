@@ -1,9 +1,25 @@
-[gd_scene format=3 uid="uid://dcrrdsu4pgww1"]
+[gd_scene format=3 uid="uid://c06a0g02hj54g"]
 
 [ext_resource type="Script" uid="uid://bjx75pnkwofvs" path="res://camera_script.gd" id="1_camera"]
 [ext_resource type="Script" uid="uid://dxxnfbcr4ncsy" path="res://scripts/particles.cs" id="2_particles"]
 [ext_resource type="Script" uid="uid://deuah7mdfqbj2" path="res://hand_overlay.gd" id="3_overlay"]
 [ext_resource type="Texture2D" uid="uid://ceyxyo0ytjnp5" path="res://assets/pointing_up_icon_white.png" id="4_icon"]
+[ext_resource type="Shader" uid="uid://xt02x7ghojgo" path="res://shaders/background_waves.gdshader" id="5_bg_waves"]
+[ext_resource type="Shader" path="res://shaders/body_silhouette.gdshader" id="6_body_silhouette"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_bg_waves"]
+shader = ExtResource("5_bg_waves")
+shader_parameter/ripple_count = 10
+shader_parameter/ripple_lifetime = 3.2
+shader_parameter/ripple_speed = 0.32
+shader_parameter/ring_sharpness = 26.0
+shader_parameter/intensity = 0.55
+shader_parameter/base_color = Color(0.015, 0.02, 0.035, 1)
+shader_parameter/color_deep = Color(0.04, 0.16, 0.5, 1)
+shader_parameter/color_light = Color(0.3, 0.62, 0.95, 1)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_body_silhouette"]
+shader = ExtResource("6_body_silhouette")
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_instruction"]
 content_margin_left = 24.0
@@ -31,6 +47,11 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_camera")
+model_path = null
+max_hands = null
+pointing_up_confidence = null
+depth_threshold = null
+show_hand_detection = null
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
 auto_start = true
@@ -38,6 +59,7 @@ device_id = "Kinect v1 (Xbox 360):kinectv1:A00364A11113032A"
 preferred_backend = "kinectv1"
 
 [node name="Background" type="ColorRect" parent="Control" unique_id=432636189]
+material = SubResource("ShaderMaterial_bg_waves")
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -50,8 +72,19 @@ color = Color(0, 0, 0, 1)
 [node name="Particles" type="CanvasLayer" parent="Control" unique_id=850011294]
 script = ExtResource("2_particles")
 
+[node name="BodySilhouette" type="TextureRect" parent="Control/Particles"]
+material = SubResource("ShaderMaterial_body_silhouette")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+stretch_mode = 5
+
 [node name="HandDetectionLayer" type="CanvasLayer" parent="Control" unique_id=925048862]
 layer = 2
+visible = false
 
 [node name="HandOverlay" type="Control" parent="Control/HandDetectionLayer" unique_id=1832512813]
 visible = false
