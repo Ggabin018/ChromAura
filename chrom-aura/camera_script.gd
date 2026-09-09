@@ -10,6 +10,8 @@ extends Control
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
 @onready var status_label: Label = $Status
 @onready var gesture_status_label: Label = $GestureStatus
+@onready var particles_layer: Node = $Particles
+@onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
@@ -98,31 +100,53 @@ func _on_gesture_result(
 			points.append(Vector2(landmark.x, landmark.y))
 		hands.append(points)
 
-	_apply_gesture_result.call_deferred(hands, _get_pointing_up_score(result))
-
-
-func _get_pointing_up_score(result: MediaPipeGestureRecognizerResult) -> float:
+	var pointing_fingers: Array[Vector2] = []
 	var best_score := 0.0
-	for gesture in result.gestures:
-		for category in gesture.categories:
+
+	var hand_count := mini(result.hand_landmarks.size(), result.gestures.size())
+	for i in range(hand_count):
+		for category in result.gestures[i].categories:
 			if category.category_name == "Pointing_Up":
 				best_score = maxf(best_score, category.score)
-	return best_score
+				if category.score >= pointing_up_confidence and result.hand_landmarks[i].landmarks.size() > 8:
+					pointing_fingers.append(Vector2(
+						result.hand_landmarks[i].landmarks[8].x,
+						result.hand_landmarks[i].landmarks[8].y
+					))
+
+	_apply_gesture_result.call_deferred(hands, best_score, pointing_fingers)
 
 
 func _apply_gesture_result(
 	hands: Array[PackedVector2Array],
 	pointing_up_score: float,
+	pointing_fingers: Array[Vector2],
 ) -> void:
 	_recognition_pending = false
 
+	var is_pointing := pointing_fingers.size() > 0 or pointing_up_score >= pointing_up_confidence
+
+	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
+		particles_layer.UpdatePointingState(is_pointing, pointing_fingers)
+
+	_update_draw_instruction(is_pointing)
+
 	if show_hand_detection:
 		hand_overlay.show_hands(hands, _rgb_frame_size)
-		gesture_status_label.visible = pointing_up_score >= pointing_up_confidence
+		gesture_status_label.visible = is_pointing
 		if gesture_status_label.visible:
 			gesture_status_label.text = "Pointing Up detected (%.0f%%)" % (pointing_up_score * 100.0)
 	else:
 		gesture_status_label.visible = false
+
+
+func _update_draw_instruction(is_pointing: bool) -> void:
+	if not is_instance_valid(draw_instruction):
+		return
+	if is_pointing:
+		draw_instruction.modulate = Color(0.25, 1.0, 0.85, 1.0)
+	else:
+		draw_instruction.modulate = Color(1.0, 1.0, 1.0, 0.85)
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
