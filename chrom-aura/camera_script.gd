@@ -119,7 +119,7 @@ func _on_gesture_result(
 	result: MediaPipeGestureRecognizerResult,
 	_image: MediaPipeImage,
 	_timestamp_ms: int,
-) -> void:
+):
 	var hands: Array[PackedVector2Array] = []
 	for detected_hand in result.hand_landmarks:
 		var points := PackedVector2Array()
@@ -136,7 +136,6 @@ func _on_gesture_result(
 			if category.category_name == "Pointing_Up":
 				best_score = maxf(best_score, category.score)
 	return best_score
-
 
 func _apply_gesture_result(
 	hands: Array[PackedVector2Array],

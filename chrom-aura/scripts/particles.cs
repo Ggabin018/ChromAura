@@ -139,35 +139,35 @@ uniform float scale_max = 1.25;
 
 float rand(float seed)
 {
-    return fract(sin(seed * 12.9898) * 43758.5453);
+	return fract(sin(seed * 12.9898) * 43758.5453);
 }
 
 void start()
 {
-    // Damping aléatoire par particule, stocké dans un canal
-    // CUSTOM libre (on garde CUSTOM.r pour la profondeur)
-    float r1 = rand(float(INDEX) + TIME);
-    CUSTOM.g = mix(damping_min, damping_max, r1);
+	// Damping aléatoire par particule, stocké dans un canal
+	// CUSTOM libre (on garde CUSTOM.r pour la profondeur)
+	float r1 = rand(float(INDEX) + TIME);
+	CUSTOM.g = mix(damping_min, damping_max, r1);
 
-    // Scale aléatoire appliqué une fois, à l'émission
-    float r2 = rand(float(INDEX) * 1.37 + TIME);
-    float s = mix(scale_min, scale_max, r2);
-    TRANSFORM[0].xy *= s;
-    TRANSFORM[1].xy *= s;
+	// Scale aléatoire appliqué une fois, à l'émission
+	float r2 = rand(float(INDEX) * 1.37 + TIME);
+	float s = mix(scale_min, scale_max, r2);
+	TRANSFORM[0].xy *= s;
+	TRANSFORM[1].xy *= s;
 
-    // On NE TOUCHE PAS à COLOR ni CUSTOM.r ici :
-    // ils ont déjà été fixés par EmitParticle() côté C#.
+	// On NE TOUCHE PAS à COLOR ni CUSTOM.r ici :
+	// ils ont déjà été fixés par EmitParticle() côté C#.
 }
 
 void process()
 {
-    // Gravité nulle : rien à ajouter à VELOCITY.
+	// Gravité nulle : rien à ajouter à VELOCITY.
 
-    // Damping exponentiel (équivalent DampingMin/Max de ParticleProcessMaterial)
-    float damping = CUSTOM.g;
-    VELOCITY *= exp(-damping * DELTA);
+	// Damping exponentiel (équivalent DampingMin/Max de ParticleProcessMaterial)
+	float damping = CUSTOM.g;
+	VELOCITY *= exp(-damping * DELTA);
 
-    // Toujours rien touché sur COLOR / CUSTOM.r ici.
+	// Toujours rien touché sur COLOR / CUSTOM.r ici.
 }
 "
 		};
@@ -314,6 +314,13 @@ void process()
 				sparkleColor = new Color(1.0f, 0.92f, 0.45f, 0.98f); // Radiant gold
 
 			var targetSystem = isNearPointingHand ? _trailParticleSystem : _sparkleParticleSystem;
+			
+			var color = ParticleColorAtMaxDepth.Lerp(
+				ParticleColorAtMinDepth,
+				closeness
+			);
+			
+			targetSystem.ProcessMaterial.Set("color", color);
 			targetSystem.EmitParticle(
 				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-1.0f, 1.0f), _random.RandfRange(-1.0f, 1.0f))),
 				sparkleDrift,
@@ -340,7 +347,13 @@ void process()
 			var mistDrift = new Vector2(
 				_random.RandfRange(-0.9f, 0.9f),
 				_random.RandfRange(-1.5f, 0.4f));
+				
+			var color = ParticleColorAtMaxDepth.Lerp(
+				ParticleColorAtMinDepth,
+				closeness
+			);
 
+			_mistParticleSystem.ProcessMaterial.Set("color", color);
 			_mistParticleSystem.EmitParticle(
 				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-0.8f, 0.8f), _random.RandfRange(-0.8f, 0.8f))),
 				mistDrift,
@@ -473,8 +486,6 @@ void process()
 			ProcessMaterial = material,
 			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
 		};
-
-		return particleSystem;
 	}
 
 	private GpuParticles2D CreateTrailParticleSystem()
