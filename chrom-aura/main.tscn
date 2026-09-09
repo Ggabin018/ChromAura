@@ -8,11 +8,11 @@
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_bg_waves"]
 shader = ExtResource("5_bg_waves")
-shader_parameter/ripple_count = 10
+shader_parameter/ripple_count = 3
 shader_parameter/ripple_lifetime = 3.2
 shader_parameter/ripple_speed = 0.32
 shader_parameter/ring_sharpness = 26.0
-shader_parameter/intensity = 0.3
+shader_parameter/intensity = 0.1
 shader_parameter/base_color = Color(0.015, 0.02, 0.035, 1)
 shader_parameter/color_deep = Color(0.04, 0.16, 0.5, 1)
 shader_parameter/color_light = Color(0.3, 0.62, 0.95, 1)
@@ -47,7 +47,6 @@ model_path = null
 max_hands = null
 pointing_up_confidence = null
 depth_threshold = null
-show_hand_detection = null
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
 auto_start = true
