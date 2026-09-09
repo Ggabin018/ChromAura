@@ -12,6 +12,7 @@ extends Control
 @onready var gesture_status_label: Label = $GestureStatus
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
+@onready var audio_manager: Node = get_node_or_null("AudioManager")
 
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
@@ -22,6 +23,13 @@ var dev_mode_toggled := false
 
 
 func _ready() -> void:
+	if audio_manager == null:
+		var audio_mgr_script: Script = load("res://audio_manager.gd")
+		if audio_mgr_script != null:
+			audio_manager = audio_mgr_script.new()
+			audio_manager.name = "AudioManager"
+			add_child(audio_manager)
+
 	depth_camera.rgb_frame_ready.connect(_on_rgb_frame)
 	depth_camera.depth_frame_ready.connect(_on_depth_frame)
 
@@ -150,6 +158,9 @@ func _apply_gesture_result(
 		particles_layer.UpdatePointingState(is_pointing, pointing_fingers)
 
 	_update_draw_instruction(is_pointing)
+
+	if is_instance_valid(audio_manager) and audio_manager.has_method("set_drawing"):
+		audio_manager.set_drawing(is_pointing)
 
 	if dev_mode_toggled:
 		hand_overlay.show_hands(hands, _rgb_frame_size)
