@@ -32,7 +32,7 @@ func _ready() -> void:
 	gesture_status_label.visible = false
 
 	if _initialize_gesture_recognizer():
-	#	_set_status("Kinect & MediaPipe Initialized.")
+		_set_status("")
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
