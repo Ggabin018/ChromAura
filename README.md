@@ -35,7 +35,8 @@ godot --headless --path chrom-aura \
 
 ## Camera source
 
-The webcam is the default RGB source for local development. To restore the
-original Kinect RGB and depth streams, select the root `Control` node in
-`main.tscn` and change **Camera > Camera Source** from `WEBCAM` to `KINECT`.
-No code or scene connection needs to be changed.
+The Kinect is the default source and provides both the RGB stream used by
+MediaPipe and the depth stream used by the particle renderer. For webcam-only
+development, select the root `Control` node in `main.tscn` and change
+**Camera > Camera Source** from `KINECT` to `WEBCAM`. No code or scene
+connection needs to be changed.
