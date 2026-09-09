@@ -1,60 +1,138 @@
+#nullable enable
 using Godot;
 using System;
 using System.Collections.Generic;
 
+/// <summary>
+/// Gestionnaire principal de rendu de particules (ChromAura).
+/// Gère les systèmes de particules GPU pour la silhouette corporelle et les tracés de dessin,
+/// applique les palettes de couleurs par corps détecté et délègue la segmentation à BodyDetector.
+/// </summary>
 public partial class particles : CanvasLayer
 {
-	[Export] public float TrailLifetime { get; set; } = 4.0f;
-	[Export] public float MistLifetime { get; set; } = 0.38f;
-	[Export] public float SparkleLifetime { get; set; } = 0.22f;
-	[Export] public int ParticlesPerSecond { get; set; } = 38000;
-	[Export] public int MaxMistParticles { get; set; } = 35000;
-	[Export] public int MaxSparkleParticles { get; set; } = 30000;
-	[Export] public int MaxTrailParticles { get; set; } = 25000;
-	[Export] public float HandPersistentRadius { get; set; } = 38.0f;
-	[Export] public bool PreserveAspectRatio { get; set; } = true;
-	[Export] public bool ColorFromDepth { get; set; } = true;
-	[Export] public int Stride { get; set; } = 2;
-	[Export] public float EtherealGlowIntensity { get; set; } = 1.15f;
-	[Export] public float DepthFarThreshold { get; set; } = 0.67f;
-	[Export] public float DepthNearThreshold { get; set; } = 0.88f;
+	/// <summary>Émis lorsque le nombre de corps détectés change.</summary>
+	[Signal] public delegate void BodyCountChangedEventHandler(int count);
 
+	// =========================================================================
+	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
+	// =========================================================================
+
+	[ExportGroup("Durées de vie")]
+	/// <summary>Durée de vie (secondes) des particules de tracé de dessin persistant.</summary>
+	[Export] public float TrailLifetime { get; set; } = 8.0f;
+
+	/// <summary>Durée de vie (secondes) des particules de la silhouette du corps.</summary>
+	[Export] public float BodyLifetime { get; set; } = 0.22f;
+
+	[ExportGroup("Débits et Limites")]
+	/// <summary>Nombre de particules de silhouette émises par seconde.</summary>
+	[Export] public int ParticlesPerSecond { get; set; } = 3600;
+
+	/// <summary>Capacité maximale du pool de particules de corps par système.</summary>
+	[Export] public int MaxBodyParticles { get; set; } = 6000;
+
+	/// <summary>Capacité maximale du pool de particules de tracé par système.</summary>
+	[Export] public int MaxTrailParticles { get; set; } = 25000;
+
+	[ExportGroup("Détection et Interaction")]
+	/// <summary>Rayon d'influence (pixels masque) autour d'un doigt pointé pour émettre des particules de tracé.</summary>
+	[Export] public float HandPersistentRadius { get; set; } = 45.0f;
+
+	/// <summary>Conserve le ratio d'aspect de la caméra lors de la conversion vers l'écran.</summary>
+	[Export] public bool PreserveAspectRatio { get; set; } = true;
+
+	/// <summary>Interpole la couleur de chaque particule selon la profondeur mesurée.</summary>
+	[Export] public bool ColorFromDepth { get; set; } = true;
+
+	/// <summary>Pas de sous-échantillonnage de la grille pour le clustering de corps.</summary>
+	[Export] public int ClusterStride { get; set; } = 4;
+
+	/// <summary>Discontinuité maximale de profondeur Z autorisée entre deux pixels d'un même corps.</summary>
+	[Export] public float MaxDepthDiscontinuity { get; set; } = 0.14f;
+
+	/// <summary>Nombre minimal de pixels pour valider la détection d'un corps (filtre de bruit).</summary>
+	[Export] public int MinClusterPixels { get; set; } = 20;
+
+	/// <summary>Distance maximale (pixels) pour associer un corps d'une trame à la suivante.</summary>
+	[Export] public float MaxTrackingDistance { get; set; } = 160.0f;
+
+	/// <summary>Nombre maximal de trames d'absence avant de supprimer un corps non détecté.</summary>
+	[Export] public int MaxMissedFrames { get; set; } = 15;
+
+	[ExportGroup("Rendu et Débug")]
+	/// <summary>Active le mode de mélange additif pour un effet d'aura lumineux et bioluminescent.</summary>
+	[Export] public bool AdditiveBlending { get; set; } = true;
+
+	/// <summary>Affiche l'overlay de débug (boîtes englobantes et centroïdes). Désactivé par défaut (Touche D).</summary>
+	[Export] public bool ShowBodyDebug { get; set; } = false;
+
+	/// <summary>Décalage manuel des palettes (Touche P) pour tester les 5 palettes avec un seul utilisateur.</summary>
+	[Export] public int PaletteOffset { get; set; } = 0;
+
+	// =========================================================================
+	// PROPRIÉTÉS PUBLIQUES
+	// =========================================================================
+
+	/// <summary>Nombre de corps actuellement détectés et suivis.</summary>
+	public int DetectedBodyCount => _bodyDetector.DetectedBodyCount;
+
+	/// <summary>Accès en lecture seule à la liste des corps suivis.</summary>
+	public IReadOnlyList<TrackedBody> TrackedBodies => _bodyDetector.TrackedBodies;
+
+	// =========================================================================
+	// ÉTAT INTERNE
+	// =========================================================================
+
+	private readonly BodyDetector _bodyDetector = new();
 	private readonly List<MaskSample> _maskPoints = new();
 	private readonly List<Vector2> _currentFingers = new();
+	private readonly List<int> _fingerPaletteIndices = new();
 	private readonly List<Vector2> _prevFingerScreenPos = new();
 	private readonly RandomNumberGenerator _random = new();
 
-	private GpuParticles2D _mistParticleSystem = null!;
-	private GpuParticles2D _sparkleParticleSystem = null!;
-	private GpuParticles2D _trailParticleSystem = null!;
+	// 5 systèmes GPU dédiés pour les corps et 5 pour les tracés (un par palette)
+	private readonly GpuParticles2D[] _bodyParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
+	private readonly GpuParticles2D[] _trailParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
+	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
 	private float _emissionRemainder;
 	private bool _isPointingUp;
 	private double _lastFingerUpdateTime;
-	private double _elapsedTime;
+	private int _lastReportedBodyCount = -1;
+
+	// =========================================================================
+	// CYCLE DE VIE GODOT
+	// =========================================================================
 
 	public override void _Ready()
 	{
 		_random.Randomize();
 
-		_mistParticleSystem = CreateMistParticleSystem();
-		AddChild(_mistParticleSystem);
+		// Initialisation des 5 systèmes GPU de corps et 5 systèmes de tracés
+		var palettes = BodyPalette.DefaultPalettes;
+		for (var i = 0; i < palettes.Length; i++)
+		{
+			_bodyParticleSystems[i] = CreateBodyParticleSystem(palettes[i]);
+			AddChild(_bodyParticleSystems[i]);
 
-		_sparkleParticleSystem = CreateSparkleParticleSystem();
-		AddChild(_sparkleParticleSystem);
+			_trailParticleSystems[i] = CreateTrailParticleSystem(palettes[i]);
+			AddChild(_trailParticleSystems[i]);
+		}
 
-		_trailParticleSystem = CreateTrailParticleSystem();
-		AddChild(_trailParticleSystem);
+		// Initialisation de l'overlay de débug séparé
+		_debugOverlay = new BodyDebugOverlay();
+		_debugOverlay.Initialize(this);
+		_debugOverlay.IsVisibleInGame = ShowBodyDebug;
+		AddChild(_debugOverlay);
 	}
 
 	public override void _Process(double delta)
 	{
-		_elapsedTime += delta;
 		_lastFingerUpdateTime += delta;
 		var isPointingActive = _isPointingUp && (_lastFingerUpdateTime < 0.35);
 
-		// Emit persistent trail particles along the pointing finger movement path
+		// 1. Émission des tracés lumineux le long de la trajectoire des doigts pointés
 		if (isPointingActive && _currentFingers.Count > 0)
 		{
 			EmitFingerTrails();
@@ -64,7 +142,7 @@ public partial class particles : CanvasLayer
 			_prevFingerScreenPos.Clear();
 		}
 
-		// Emit body / silhouette particles from depth mask
+		// 2. Émission des particules de silhouette corporelle
 		if (_maskPoints.Count == 0)
 			return;
 
@@ -78,10 +156,50 @@ public partial class particles : CanvasLayer
 		}
 	}
 
+	/// <summary>
+	/// Gestion des raccourcis clavier utilisateur pour le contrôle en temps réel.
+	/// </summary>
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
+		{
+			// Touche D : Bascule de l'affichage des boîtes de débug
+			if (keyEvent.Keycode == Key.D)
+			{
+				ShowBodyDebug = !ShowBodyDebug;
+				if (_debugOverlay != null)
+				{
+					_debugOverlay.IsVisibleInGame = ShowBodyDebug;
+					_debugOverlay.QueueRedraw();
+				}
+			}
+			// Touche P : Cycle manuel des palettes pour prévisualisation
+			else if (keyEvent.Keycode == Key.P)
+			{
+				var palettes = BodyPalette.DefaultPalettes;
+				PaletteOffset = (PaletteOffset + 1) % palettes.Length;
+				for (var i = 0; i < _bodyDetector.TrackedBodies.Count; i++)
+				{
+					_bodyDetector.TrackedBodies[i].PaletteIndex =
+						(_bodyDetector.TrackedBodies[i].Id - 1 + PaletteOffset) % palettes.Length;
+				}
+				EmitSignal(SignalName.BodyCountChanged, _bodyDetector.DetectedBodyCount);
+			}
+		}
+	}
+
+	// =========================================================================
+	// API PUBLIQUE (Appelée depuis GDScript / camera_script.gd)
+	// =========================================================================
+
+	/// <summary>
+	/// Met à jour l'état de détection du geste 'Pointing_Up' et les coordonnées des doigts pointés.
+	/// </summary>
 	public void UpdatePointingState(bool isPointing, Godot.Collections.Array<Vector2> pointingFingers)
 	{
 		_isPointingUp = isPointing;
 		_currentFingers.Clear();
+
 		if (pointingFingers != null)
 		{
 			foreach (var f in pointingFingers)
@@ -89,117 +207,80 @@ public partial class particles : CanvasLayer
 				_currentFingers.Add(f);
 			}
 		}
+
+		// Délégation de l'association doigts-corps au BodyDetector
+		_bodyDetector.AssignPointingFingers(
+			pointingFingers,
+			_maskSize,
+			PaletteOffset,
+			BodyPalette.DefaultPalettes.Length,
+			_fingerPaletteIndices
+		);
+
 		_lastFingerUpdateTime = 0.0;
 	}
 
+	/// <summary>
+	/// Reçoit le masque de profondeur Kinect et met à jour les corps détectés et échantillons.
+	/// </summary>
 	public void SetDepthImageMask(Image depthImage)
 	{
 		if (depthImage == null)
 			throw new ArgumentNullException(nameof(depthImage));
 
-		var width = depthImage.GetWidth();
-		var height = depthImage.GetHeight();
-		_maskPoints.Clear();
-		_maskSize = new Vector2I(width, height);
+		_maskSize = new Vector2I(depthImage.GetWidth(), depthImage.GetHeight());
 
-		for (var y = 0; y < height; y += Stride)
+		// Traitement de segmentation et tracking délégué au module spécialisé
+		_bodyDetector.ProcessDepthImage(
+			depthImage,
+			ClusterStride,
+			MaxDepthDiscontinuity,
+			MinClusterPixels,
+			MaxTrackingDistance,
+			MaxMissedFrames,
+			PaletteOffset,
+			BodyPalette.DefaultPalettes.Length,
+			_random,
+			_maskPoints
+		);
+
+		// Signal si le nombre de corps a évolué
+		var currentCount = _bodyDetector.DetectedBodyCount;
+		if (currentCount != _lastReportedBodyCount)
 		{
-			for (var x = 0; x < width; x += Stride)
-			{
-				var depth = depthImage.GetPixel(x, y).R;
-				if (depth <= 0.001f)
-					continue;
+			_lastReportedBodyCount = currentCount;
+			EmitSignal(SignalName.BodyCountChanged, _lastReportedBodyCount);
+		}
 
-				var position = new Vector2(
-					x + _random.RandfRange(-0.35f, 0.35f) * Stride,
-					y + _random.RandfRange(-0.35f, 0.35f) * Stride);
-
-				_maskPoints.Add(new MaskSample(position, depth));
-			}
+		// Redessin de l'overlay de débug si activé
+		if (ShowBodyDebug && _debugOverlay != null)
+		{
+			_debugOverlay.QueueRedraw();
 		}
 	}
 
-	private void EmitFingerTrails()
+	/// <summary>
+	/// Retourne les informations de débug pour l'interface HUD (utilisé par camera_script.gd).
+	/// </summary>
+	public Godot.Collections.Array<Godot.Collections.Dictionary> GetBodiesDebugInfo()
 	{
-		if (_prevFingerScreenPos.Count != _currentFingers.Count)
-		{
-			_prevFingerScreenPos.Clear();
-			foreach (var finger in _currentFingers)
-			{
-				_prevFingerScreenPos.Add(NormalizedToScreen(finger));
-			}
-			return;
-		}
-
-		for (var i = 0; i < _currentFingers.Count; i++)
-		{
-			var currentScreen = NormalizedToScreen(_currentFingers[i]);
-			var prevScreen = _prevFingerScreenPos[i];
-			var distance = prevScreen.DistanceTo(currentScreen);
-
-			if (distance < 500.0f)
-			{
-				var steps = Mathf.Max(2, Mathf.CeilToInt(distance / 1.8f));
-				for (var s = 0; s <= steps; s++)
-				{
-					var t = (float)s / steps;
-					var center = prevScreen.Lerp(currentScreen, t);
-					EmitSingleTrailParticle(center);
-				}
-			}
-			else
-			{
-				for (var s = 0; s < 5; s++)
-				{
-					EmitSingleTrailParticle(currentScreen);
-				}
-			}
-
-			_prevFingerScreenPos[i] = currentScreen;
-		}
+		return _bodyDetector.GetBodiesDebugInfo(BodyPalette.DefaultPalettes);
 	}
 
-	private void EmitSingleTrailParticle(Vector2 basePosition)
-	{
-		var offset = new Vector2(
-			_random.RandfRange(-2.0f, 2.0f),
-			_random.RandfRange(-2.0f, 2.0f));
-		var drift = new Vector2(
-			_random.RandfRange(-1.5f, 1.5f),
-			_random.RandfRange(-3.0f, 1.0f));
+	// =========================================================================
+	// ÉMISSION DE PARTICULES
+	// =========================================================================
 
-		var hueChoice = _random.Randf();
-		Color trailColor;
-		if (hueChoice < 0.45f)
-		{
-			trailColor = new Color(0.15f, 0.85f, 1.0f, 0.85f).Lerp(new Color(0.65f, 0.25f, 1.0f, 0.85f), _random.Randf());
-		}
-		else if (hueChoice < 0.8f)
-		{
-			trailColor = new Color(1.0f, 0.35f, 0.85f, 0.85f).Lerp(new Color(0.35f, 0.95f, 0.8f, 0.85f), _random.Randf());
-		}
-		else
-		{
-			trailColor = new Color(1.0f, 0.92f, 0.55f, 0.90f);
-		}
-
-		_trailParticleSystem.EmitParticle(
-			new Transform2D(0.0f, basePosition + offset),
-			drift,
-			trailColor * EtherealGlowIntensity,
-			Colors.White,
-			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
-	}
-
+	/// <summary>
+	/// Émet une particule échantillonnée sur la silhouette du corps,
+	/// dans le système GPU correspondant à la palette du corps détecté.
+	/// </summary>
 	private void EmitSampledParticle(bool isPointingActive)
 	{
 		var sample = _maskPoints[_random.RandiRange(0, _maskPoints.Count - 1)];
 		var screenPos = MaskToScreen(sample.Position);
 
-		// Absolute distance from camera: 0.0 (far ~0.67) -> 1.0 (close ~0.88+)
-		var depthSpan = Mathf.Max(0.01f, DepthNearThreshold - DepthFarThreshold);
-		var closeness = Mathf.Clamp((sample.NormalizedDepth - DepthFarThreshold) / depthSpan, 0.0f, 1.0f);
-
+		// Vérifier si l'échantillon est situé à proximité immédiate d'un doigt pointé
 		var isNearPointingHand = false;
 		if (isPointingActive && _currentFingers.Count > 0)
 		{
@@ -214,77 +295,125 @@ public partial class particles : CanvasLayer
 			}
 		}
 
-		// Far = 100% fine misty soft nebula dust (low sparkle chance 0.01)
-		// Close = heavily sparkling crystalline diamonds & glittering starlight (sparkle chance up to 0.85)
-		var sparkleChance = Mathf.Lerp(0.01f, 0.85f, Mathf.Pow(closeness, 1.8f));
+		var drift = new Vector2(_random.RandfRange(-8.0f, 8.0f), _random.RandfRange(-11.0f, 4.0f));
+		var palettes = BodyPalette.DefaultPalettes;
+		var paletteIndex = sample.PaletteIndex % palettes.Length;
+		var palette = palettes[paletteIndex];
+
+		// Interpolation de la couleur selon la distance/profondeur Z mesurée
+		var depthSpan = Mathf.Max(_bodyDetector.MaxDepth - _bodyDetector.MinDepth, 0.001f);
+		var depthT = Mathf.Clamp((sample.NormalizedDepth - _bodyDetector.MinDepth) / depthSpan, 0.0f, 1.0f);
+		var color = ColorFromDepth ? palette.EvaluateBody(depthT) : palette.ColorNear;
+
+		// Sélection du système GPU dédié à cette palette
+		var targetSystem = isNearPointingHand
+			? _trailParticleSystems[paletteIndex]
+			: _bodyParticleSystems[paletteIndex];
+
+		var finalDrift = isNearPointingHand ? drift * 0.4f : drift;
 		if (isNearPointingHand)
 		{
-			sparkleChance = 0.88f;
+			color = palette.EvaluateTrail(_random.Randf());
 		}
 
-		var isSparkle = _random.Randf() < sparkleChance;
+		targetSystem.EmitParticle(
+			new Transform2D(0.0f, screenPos),
+			finalDrift,
+			color,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+	}
 
-		if (isSparkle)
+	/// <summary>
+	/// Émet les particules de tracé le long du mouvement des doigts pointés.
+	/// </summary>
+	private void EmitFingerTrails()
+	{
+		if (_prevFingerScreenPos.Count != _currentFingers.Count)
 		{
-			// Sparkle: Crisp diamond starlight with sparkling twinkle
-			var sparkleDrift = new Vector2(
-				_random.RandfRange(-2.2f, 2.2f),
-				_random.RandfRange(-3.0f, 1.2f));
+			_prevFingerScreenPos.Clear();
+			foreach (var finger in _currentFingers)
+			{
+				_prevFingerScreenPos.Add(NormalizedToScreen(finger));
+			}
+			return;
+		}
 
-			Color sparkleColor;
-			var sparkleType = _random.Randf();
-			if (sparkleType < 0.40f)
-				sparkleColor = new Color(1.0f, 1.0f, 1.0f, 0.98f); // Pure diamond starlight
-			else if (sparkleType < 0.70f)
-				sparkleColor = new Color(0.35f, 0.95f, 1.0f, 0.95f); // Electric diamond cyan
-			else if (sparkleType < 0.88f)
-				sparkleColor = new Color(1.0f, 0.50f, 0.95f, 0.95f); // Crystal magenta
+		var palettes = BodyPalette.DefaultPalettes;
+		for (var i = 0; i < _currentFingers.Count; i++)
+		{
+			var currentScreen = NormalizedToScreen(_currentFingers[i]);
+			var prevScreen = _prevFingerScreenPos[i];
+			var distance = prevScreen.DistanceTo(currentScreen);
+			var paletteIndex = (i < _fingerPaletteIndices.Count)
+				? (_fingerPaletteIndices[i] % palettes.Length)
+				: (PaletteOffset % palettes.Length);
+
+			var targetSystem = _trailParticleSystems[paletteIndex];
+			var palette = palettes[paletteIndex];
+
+			if (distance < 500.0f)
+			{
+				// Interpolation linéaire pour que le tracé reste continu même lors de mouvements vifs
+				var steps = Mathf.Max(2, Mathf.CeilToInt(distance / 3.0f));
+				for (var s = 0; s <= steps; s++)
+				{
+					var t = (float)s / steps;
+					var center = prevScreen.Lerp(currentScreen, t);
+					EmitSingleTrailParticle(center, targetSystem, palette);
+				}
+			}
 			else
-				sparkleColor = new Color(1.0f, 0.92f, 0.45f, 0.98f); // Radiant gold
+			{
+				for (var s = 0; s < 4; s++)
+				{
+					EmitSingleTrailParticle(currentScreen, targetSystem, palette);
+				}
+			}
 
-			var targetSystem = isNearPointingHand ? _trailParticleSystem : _sparkleParticleSystem;
-			targetSystem.EmitParticle(
-				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-1.0f, 1.0f), _random.RandfRange(-1.0f, 1.0f))),
-				sparkleDrift,
-				sparkleColor * EtherealGlowIntensity,
-				Colors.White,
-				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
-		}
-		else
-		{
-			// Mist: Soft dreamy nebula dust preserving the exact far look
-			var wave = (float)Math.Sin(_elapsedTime * 1.5 + sample.Position.Y * 0.008f) * 0.12f;
-			var harmonicDepth = Mathf.Clamp(closeness + wave, 0.0f, 1.0f);
-
-			var farMist = new Color(0.28f, 0.12f, 0.65f, 0.32f).Lerp(
-				new Color(0.06f, 0.70f, 0.85f, 0.35f),
-				harmonicDepth);
-
-			var nearMist = new Color(0.12f, 0.88f, 1.0f, 0.42f).Lerp(
-				new Color(0.92f, 0.30f, 0.82f, 0.42f),
-				harmonicDepth);
-
-			var mistColor = farMist.Lerp(nearMist, closeness) * EtherealGlowIntensity;
-
-			var mistDrift = new Vector2(
-				_random.RandfRange(-0.9f, 0.9f),
-				_random.RandfRange(-1.5f, 0.4f));
-
-			_mistParticleSystem.EmitParticle(
-				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-0.8f, 0.8f), _random.RandfRange(-0.8f, 0.8f))),
-				mistDrift,
-				mistColor,
-				Colors.White,
-				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
+			_prevFingerScreenPos[i] = currentScreen;
 		}
 	}
+
+	/// <summary>
+	/// Émet une particule de tracé unique dans le système GPU spécifié.
+	/// </summary>
+	private void EmitSingleTrailParticle(Vector2 basePosition, GpuParticles2D targetSystem, BodyPalette palette)
+	{
+		var offset = new Vector2(
+			_random.RandfRange(-6.0f, 6.0f),
+			_random.RandfRange(-6.0f, 6.0f)
+		);
+		var drift = new Vector2(
+			_random.RandfRange(-5.0f, 5.0f),
+			_random.RandfRange(-6.0f, 4.0f)
+		);
+
+		var color = palette.EvaluateTrail(_random.Randf());
+
+		targetSystem.EmitParticle(
+			new Transform2D(0.0f, basePosition + offset),
+			drift,
+			color,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+	}
+
+	// =========================================================================
+	// CONVERSIONS DE COORDONNÉES
+	// =========================================================================
 
 	private Vector2 NormalizedToScreen(Vector2 normalized)
 	{
 		return MaskToScreen(new Vector2(normalized.X * _maskSize.X, normalized.Y * _maskSize.Y));
 	}
 
-	private Vector2 MaskToScreen(Vector2 maskPoint)
+	/// <summary>
+	/// Convertit un point de l'espace masque (résolution caméra Kinect) vers l'espace écran du viewport.
+	/// </summary>
+	public Vector2 MaskToScreen(Vector2 maskPoint)
 	{
 		var viewport = GetViewport().GetVisibleRect().Size;
 		var scaleX = viewport.X / Mathf.Max(_maskSize.X, 1);
@@ -301,165 +430,107 @@ public partial class particles : CanvasLayer
 		return new Vector2(x, y);
 	}
 
-	private GpuParticles2D CreateMistParticleSystem()
-	{
-		var alphaCurve = new Curve();
-		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
-		alphaCurve.AddPoint(new Vector2(0.18f, 0.65f));
-		alphaCurve.AddPoint(new Vector2(0.65f, 0.55f));
-		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+	// =========================================================================
+	// FABRIQUE DE SYSTÈMES ET MATÉRIAUX GPU
+	// =========================================================================
 
-		var alphaTexture = new CurveTexture { Curve = alphaCurve };
-
-		var scaleCurve = new Curve();
-		scaleCurve.AddPoint(new Vector2(0.0f, 0.35f));
-		scaleCurve.AddPoint(new Vector2(0.3f, 0.6f));
-		scaleCurve.AddPoint(new Vector2(1.0f, 0.25f));
-
-		var scaleTexture = new CurveTexture { Curve = scaleCurve };
-
-		var material = new ParticleProcessMaterial
-		{
-			ParticleFlagDisableZ = true,
-			Gravity = new Vector3(0.0f, -1.0f, 0.0f),
-			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 1.5f,
-			DampingMin = 2.0f,
-			DampingMax = 4.0f,
-			ScaleMin = 0.22f,
-			ScaleMax = 0.48f,
-			ScaleCurve = scaleTexture,
-			AlphaCurve = alphaTexture,
-			Color = Colors.White,
-		};
-
-		var canvasMaterial = new CanvasItemMaterial
-		{
-			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
-			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
-		};
-
-		return new GpuParticles2D
-		{
-			Material = canvasMaterial,
-			Amount = MaxMistParticles,
-			Lifetime = MistLifetime,
-			LocalCoords = false,
-			Emitting = false,
-			Texture = CreateMistTexture(14),
-			ProcessMaterial = material,
-			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
-		};
-	}
-
-	private GpuParticles2D CreateSparkleParticleSystem()
-	{
-		var alphaCurve = new Curve();
-		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
-		alphaCurve.AddPoint(new Vector2(0.10f, 1.0f));
-		alphaCurve.AddPoint(new Vector2(0.45f, 0.95f));
-		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
-
-		var alphaTexture = new CurveTexture { Curve = alphaCurve };
-
-		var scaleCurve = new Curve();
-		scaleCurve.AddPoint(new Vector2(0.0f, 0.2f));
-		scaleCurve.AddPoint(new Vector2(0.20f, 1.0f));
-		scaleCurve.AddPoint(new Vector2(0.60f, 0.7f));
-		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
-
-		var scaleTexture = new CurveTexture { Curve = scaleCurve };
-
-		var material = new ParticleProcessMaterial
-		{
-			ParticleFlagDisableZ = true,
-			Gravity = new Vector3(0.0f, -0.8f, 0.0f),
-			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 3.0f,
-			DampingMin = 3.0f,
-			DampingMax = 6.0f,
-			ScaleMin = 0.28f,
-			ScaleMax = 0.65f,
-			ScaleCurve = scaleTexture,
-			AlphaCurve = alphaTexture,
-			Color = Colors.White,
-		};
-
-		var canvasMaterial = new CanvasItemMaterial
-		{
-			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
-			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
-		};
-
-		return new GpuParticles2D
-		{
-			Material = canvasMaterial,
-			Amount = MaxSparkleParticles,
-			Lifetime = SparkleLifetime,
-			LocalCoords = false,
-			Emitting = false,
-			Texture = CreateSparkleTexture(16),
-			ProcessMaterial = material,
-			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
-		};
-	}
-
-	private GpuParticles2D CreateTrailParticleSystem()
+	/// <summary>
+	/// Crée un système GPU dédié pour une palette de corps, avec son dégradé ColorRamp configuré.
+	/// </summary>
+	private GpuParticles2D CreateBodyParticleSystem(BodyPalette palette)
 	{
 		var gradient = new Gradient();
-		gradient.SetColor(0, new Color(1, 1, 1, 0.95f));
-		gradient.AddPoint(0.4f, new Color(1, 1, 1, 0.85f));
-		gradient.AddPoint(0.8f, new Color(1, 1, 1, 0.45f));
-		gradient.AddPoint(1.0f, new Color(1, 1, 1, 0.0f));
+		gradient.SetColor(0, new Color(palette.ColorFar.R, palette.ColorFar.G, palette.ColorFar.B, 0.70f));
+		gradient.AddPoint(0.40f, new Color(palette.ColorNear.R, palette.ColorNear.G, palette.ColorNear.B, 0.95f));
+		gradient.AddPoint(0.85f, new Color(palette.ColorFar.R, palette.ColorFar.G, palette.ColorFar.B, 0.50f));
+		gradient.AddPoint(1.0f, new Color(palette.ColorFar.R, palette.ColorFar.G, palette.ColorFar.B, 0.0f));
 
 		var colorRamp = new GradientTexture1D
 		{
 			Gradient = gradient,
 		};
 
-		var scaleCurve = new Curve();
-		scaleCurve.AddPoint(new Vector2(0.0f, 0.3f));
-		scaleCurve.AddPoint(new Vector2(0.2f, 0.65f));
-		scaleCurve.AddPoint(new Vector2(0.7f, 0.4f));
-		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
-
-		var scaleTexture = new CurveTexture { Curve = scaleCurve };
-
-		var material = new ParticleProcessMaterial
+		var processMat = new ParticleProcessMaterial
 		{
 			ParticleFlagDisableZ = true,
-			Gravity = new Vector3(0.0f, 1.8f, 0.0f),
+			Gravity = new Vector3(0.0f, -3.0f, 0.0f), // Légère dérive ascendante (aura)
 			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 2.0f,
-			DampingMin = 1.5f,
-			DampingMax = 3.0f,
-			ScaleMin = 0.25f,
-			ScaleMax = 0.55f,
-			ScaleCurve = scaleTexture,
+			InitialVelocityMax = 4.0f,
+			DampingMin = 2.0f,
+			DampingMax = 5.0f,
+			ScaleMin = 0.6f,
+			ScaleMax = 1.35f,
 			ColorRamp = colorRamp,
-			Color = Colors.White,
+			Color = palette.ColorNear,
 		};
 
-		var canvasMaterial = new CanvasItemMaterial
-		{
-			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
-			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
-		};
+		var canvasMat = AdditiveBlending
+			? new CanvasItemMaterial { BlendMode = CanvasItemMaterial.BlendModeEnum.Add }
+			: null;
 
 		return new GpuParticles2D
 		{
-			Material = canvasMaterial,
+			Amount = MaxBodyParticles,
+			Lifetime = BodyLifetime,
+			LocalCoords = false,
+			Emitting = false,
+			Texture = CreateSoftParticleTexture(20),
+			ProcessMaterial = processMat,
+			Material = canvasMat,
+			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
+		};
+	}
+
+	/// <summary>
+	/// Crée un système GPU dédié pour les tracés de dessin d'une palette.
+	/// </summary>
+	private GpuParticles2D CreateTrailParticleSystem(BodyPalette palette)
+	{
+		var gradient = new Gradient();
+		gradient.SetColor(0, new Color(palette.TrailStart.R, palette.TrailStart.G, palette.TrailStart.B, 1.0f));
+		gradient.AddPoint(0.65f, new Color(palette.TrailEnd.R, palette.TrailEnd.G, palette.TrailEnd.B, 0.9f));
+		gradient.AddPoint(1.0f, new Color(palette.TrailEnd.R, palette.TrailEnd.G, palette.TrailEnd.B, 0.0f));
+
+		var colorRamp = new GradientTexture1D
+		{
+			Gradient = gradient,
+		};
+
+		var processMat = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = new Vector3(0.0f, 4.0f, 0.0f),
+			InitialVelocityMin = 0.0f,
+			InitialVelocityMax = 6.0f,
+			DampingMin = 2.0f,
+			DampingMax = 5.0f,
+			ScaleMin = 0.7f,
+			ScaleMax = 1.6f,
+			ColorRamp = colorRamp,
+			Color = palette.TrailStart,
+		};
+
+		var canvasMat = AdditiveBlending
+			? new CanvasItemMaterial { BlendMode = CanvasItemMaterial.BlendModeEnum.Add }
+			: null;
+
+		return new GpuParticles2D
+		{
 			Amount = MaxTrailParticles,
 			Lifetime = TrailLifetime,
 			LocalCoords = false,
 			Emitting = false,
-			Texture = CreateSparkleTexture(14),
-			ProcessMaterial = material,
+			Texture = CreateSoftParticleTexture(22),
+			ProcessMaterial = processMat,
+			Material = canvasMat,
 			VisibilityRect = new Rect2(-200, -200, 10000, 10000),
 		};
 	}
 
-	private static ImageTexture CreateMistTexture(int size)
+	/// <summary>
+	/// Génère une texture circulaire douce avec atténuation quadratique pour un rendu lumineux diffus.
+	/// </summary>
+	private static ImageTexture CreateSoftParticleTexture(int size)
 	{
 		var image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
 		var center = (size - 1) * 0.5f;
@@ -468,50 +539,11 @@ public partial class particles : CanvasLayer
 			for (var x = 0; x < size; x++)
 			{
 				var distance = new Vector2(x - center, y - center).Length() / center;
-				if (distance >= 1.0f)
-				{
-					image.SetPixel(x, y, new Color(1, 1, 1, 0));
-					continue;
-				}
-
-				var linear = 1.0f - distance;
-				var alpha = Mathf.Pow(linear, 1.8f) * 0.75f;
-				image.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp(alpha, 0.0f, 1.0f)));
+				var falloff = Mathf.Clamp(1.0f - distance, 0.0f, 1.0f);
+				var alpha = falloff * falloff;
+				image.SetPixel(x, y, new Color(1, 1, 1, alpha * 0.75f));
 			}
 		}
 		return ImageTexture.CreateFromImage(image);
 	}
-
-	private static ImageTexture CreateSparkleTexture(int size)
-	{
-		var image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
-		var center = (size - 1) * 0.5f;
-
-		for (var y = 0; y < size; y++)
-		{
-			for (var x = 0; x < size; x++)
-			{
-				var offset = new Vector2(x - center, y - center);
-				var distance = offset.Length() / center;
-				if (distance >= 1.0f)
-				{
-					image.SetPixel(x, y, new Color(1, 1, 1, 0));
-					continue;
-				}
-
-				var nx = Math.Abs(offset.X) / center;
-				var ny = Math.Abs(offset.Y) / center;
-
-				var core = Mathf.Pow(Mathf.Clamp(1.0f - distance * 2.2f, 0.0f, 1.0f), 2.0f);
-				var hRay = Mathf.Pow(Mathf.Clamp(1.0f - nx, 0.0f, 1.0f), 1.2f) * Mathf.Pow(Mathf.Clamp(1.0f - ny * 3.5f, 0.0f, 1.0f), 2.0f);
-				var vRay = Mathf.Pow(Mathf.Clamp(1.0f - ny, 0.0f, 1.0f), 1.2f) * Mathf.Pow(Mathf.Clamp(1.0f - nx * 3.5f, 0.0f, 1.0f), 2.0f);
-
-				var alpha = Mathf.Clamp(core * 1.3f + hRay * 0.7f + vRay * 0.7f, 0.0f, 1.0f);
-				image.SetPixel(x, y, new Color(1, 1, 1, alpha));
-			}
-		}
-		return ImageTexture.CreateFromImage(image);
-	}
-
-	private readonly record struct MaskSample(Vector2 Position, float NormalizedDepth);
 }

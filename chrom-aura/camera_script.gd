@@ -4,19 +4,21 @@ extends Control
 @export_range(1, 8, 1) var max_hands := 4
 @export_range(0.0, 1.0, 0.05) var pointing_up_confidence := 0.4
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
-@export var show_hand_detection := true
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
 @onready var status_label: Label = $Status
+@onready var body_status_label: RichTextLabel = $BodyStatus
 @onready var gesture_status_label: Label = $GestureStatus
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
+
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
+var dev_mode_toggled := false
 
 
 func _ready() -> void:
@@ -27,16 +29,32 @@ func _ready() -> void:
 	depth_camera.max_depth = 3.0
 	depth_camera.auto_reconnect = true
 
-	hand_overlay.visible = show_hand_detection
-	status_label.visible = show_hand_detection
+	hand_overlay.visible = false
+	status_label.visible = false
+	if is_instance_valid(body_status_label):
+		body_status_label.visible = false
 	gesture_status_label.visible = false
+	set_process_input(true)
+
+	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
+		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
+	_update_body_debug_ui()
 
 	if _initialize_gesture_recognizer():
-		_set_status("")
+		_set_status("Kinect & MediaPipe Initialized.")
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
 	depth_camera.start_streaming()
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("dev-mode-toggle"):
+		dev_mode_toggled = not dev_mode_toggled
+		hand_overlay.visible = dev_mode_toggled
+		status_label.visible = dev_mode_toggled
+		if is_instance_valid(body_status_label):
+			body_status_label.visible = dev_mode_toggled
+		gesture_status_label.visible = dev_mode_toggled and gesture_status_label.text != ""
 
 
 func _exit_tree() -> void:
@@ -133,10 +151,10 @@ func _apply_gesture_result(
 
 	_update_draw_instruction(is_pointing)
 
-	if show_hand_detection:
+	if dev_mode_toggled:
 		hand_overlay.show_hands(hands, _rgb_frame_size)
 		gesture_status_label.visible = is_pointing
-		if gesture_status_label.visible:
+		if dev_mode_toggled:
 			gesture_status_label.text = "Pointing Up detected (%.0f%%)" % (pointing_up_score * 100.0)
 	else:
 		gesture_status_label.visible = false
@@ -169,11 +187,43 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 				depth_mask.set_pixel(width - 1 - x, y, Color(depth, 0, 0, 1))
 
 	$Particles.SetDepthImageMask(depth_mask)
+	_update_body_debug_ui()
+
+
+func _on_body_count_changed(_count: int) -> void:
+	_update_body_debug_ui()
+
+
+func _update_body_debug_ui() -> void:
+	if not is_instance_valid(body_status_label):
+		return
+	if not dev_mode_toggled:
+		body_status_label.visible = false
+		return
+
+	body_status_label.visible = true
+	var count := 0
+	if is_instance_valid(particles_layer) and "DetectedBodyCount" in particles_layer:
+		count = int(particles_layer.DetectedBodyCount)
+
+	var text := "[b]👤 Corps détectés : %d[/b]" % count
+	if is_instance_valid(particles_layer) and particles_layer.has_method("GetBodiesDebugInfo"):
+		var info: Array = particles_layer.GetBodiesDebugInfo()
+		if info.size() > 0:
+			text += "  |"
+			for b in info:
+				var pal_color: String = b.get("color_near", "ffffff")
+				var pal_name: String = b.get("palette_name", "")
+				var bid: int = b.get("id", 0)
+				var is_ptr: bool = b.get("is_pointing", false)
+				var ptr_icon := " ✍️" if is_ptr else ""
+				text += "  [color=#%s]● P%d: %s%s[/color]" % [pal_color, bid, pal_name, ptr_icon]
+
+	body_status_label.text = text
 
 
 func _set_status(message: String) -> void:
-	if show_hand_detection:
-		status_label.text = message
+	status_label.text = message
 
 
 func _show_error(message: String) -> void:
