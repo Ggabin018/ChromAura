@@ -3,6 +3,23 @@
 [ext_resource type="Script" uid="uid://bjx75pnkwofvs" path="res://camera_script.gd" id="1_camera"]
 [ext_resource type="Script" uid="uid://dxxnfbcr4ncsy" path="res://scripts/particles.cs" id="2_particles"]
 [ext_resource type="Script" uid="uid://deuah7mdfqbj2" path="res://hand_overlay.gd" id="3_overlay"]
+[ext_resource type="Texture2D" uid="uid://ceyxyo0ytjnp5" path="res://assets/pointing_up_icon_white.png" id="4_icon"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_instruction"]
+content_margin_left = 24.0
+content_margin_top = 8.0
+content_margin_right = 24.0
+content_margin_bottom = 8.0
+bg_color = Color(0.05, 0.07, 0.12, 0.7)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.8, 1, 0.45)
+corner_radius_top_left = 22
+corner_radius_top_right = 22
+corner_radius_bottom_right = 22
+corner_radius_bottom_left = 22
 
 [node name="Node" type="Node" unique_id=1008517725]
 
@@ -38,6 +55,7 @@ layer = 2
 
 [node name="HandOverlay" type="Control" parent="Control/HandDetectionLayer" unique_id=1832512813]
 visible = false
+layout_mode = 3
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -79,3 +97,39 @@ theme_override_constants/shadow_offset_y = 2
 theme_override_font_sizes/font_size = 24
 text = "Pointing Up detected"
 horizontal_alignment = 2
+
+[node name="DrawInstructionLayer" type="CanvasLayer" parent="Control" unique_id=2004221877]
+layer = 3
+
+[node name="DrawInstruction" type="PanelContainer" parent="Control/DrawInstructionLayer" unique_id=987654321]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -140.0
+offset_top = 20.0
+offset_right = 140.0
+offset_bottom = 76.0
+grow_horizontal = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_instruction")
+
+[node name="HBoxContainer" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=67839875]
+layout_mode = 2
+theme_override_constants/separation = 14
+alignment = 1
+
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/HBoxContainer" unique_id=260783285]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 28
+text = "Dessinez"
+vertical_alignment = 1
+
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/HBoxContainer" unique_id=1865829958]
+custom_minimum_size = Vector2(36, 42)
+layout_mode = 2
+texture = ExtResource("4_icon")
+expand_mode = 1
+stretch_mode = 5

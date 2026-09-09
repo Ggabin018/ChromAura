@@ -21,6 +21,8 @@ var depth_max_for_color := 1.0
 @export var depth_color_max := Color8(110, 20, 220)
 
 @export var mirror_depth := true
+@onready var particles_layer: Node = $Particles
+@onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
@@ -57,7 +59,7 @@ func _ready() -> void:
 	gesture_status_label.visible = false
 
 	if _initialize_gesture_recognizer():
-		_set_status("Kinect & MediaPipe Initialized.")
+		_set_status("")
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
@@ -102,6 +104,7 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 		return
 	if image.get_format() != Image.FORMAT_RGB8:
 		image.convert(Image.FORMAT_RGB8)
+	
 	image.flip_x()
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
@@ -124,60 +127,48 @@ func _on_gesture_result(
 			points.append(Vector2(landmark.x, landmark.y))
 		hands.append(points)
 
-	_apply_gesture_result.call_deferred(hands, _get_pointing_up_score(result))
-
-func _get_pointing_up_score(result: MediaPipeGestureRecognizerResult) -> float:
+	var pointing_fingers: Array[Vector2] = []
 	var best_score := 0.0
-	for gesture in result.gestures:
-		for category in gesture.categories:
+
+	var hand_count := mini(result.hand_landmarks.size(), result.gestures.size())
+	for i in range(hand_count):
+		for category in result.gestures[i].categories:
 			if category.category_name == "Pointing_Up":
 				best_score = maxf(best_score, category.score)
 	return best_score
 
+
 func _apply_gesture_result(
 	hands: Array[PackedVector2Array],
 	pointing_up_score: float,
+	pointing_fingers: Array[Vector2],
 ) -> void:
 	_recognition_pending = false
 
+	var is_pointing := pointing_fingers.size() > 0 or pointing_up_score >= pointing_up_confidence
+
+	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
+		particles_layer.UpdatePointingState(is_pointing, pointing_fingers)
+
+	_update_draw_instruction(is_pointing)
+
 	if show_hand_detection:
 		hand_overlay.show_hands(hands, _rgb_frame_size)
-		gesture_status_label.visible = pointing_up_score >= pointing_up_confidence
+		gesture_status_label.visible = is_pointing
 		if gesture_status_label.visible:
 			gesture_status_label.text = "Pointing Up detected (%.0f%%)" % (pointing_up_score * 100.0)
 	else:
 		gesture_status_label.visible = false
 
-#func _on_depth_frame(image: ImageTexture):
-	#$DepthTexture.texture = image
-	#
-	#var w = image.get_width()
-	#var h = image.get_height()
-	#
-	#var img: Image = Image.create(image.get_width(), image.get_height(), false, Image.FORMAT_RGB8)
-	#
-	#var tmp = image.get_image()
-	#
-	#var threshold = 0.65
-	#
-	## 2. Iterate through every pixel
-	#for y in range(h):
-		#for x in range(w):
-			#var input_color: Color = tmp.get_pixel(x, y)
-	#
-			## Check your condition (e.g., Red channel value)
-			#if input_color.r < threshold:
-				#img.set_pixel(w - x, y, Color(0, 0, 0, 1))
-			#else: 
-				#var normalized = inverse_lerp(0.65, 1.0, input_color.r)
-				#var output_color = get_depth_color(
-					#Color8(180, 250, 255),
-					#Color8(110, 20, 220),
-					#normalized
-				#)
-				#img.set_pixel(w - x, y, output_color)
-	#
-	#$OutTexture.texture = ImageTexture.create_from_image(img)
+
+func _update_draw_instruction(is_pointing: bool) -> void:
+	if not is_instance_valid(draw_instruction):
+		return
+	if is_pointing:
+		draw_instruction.modulate = Color(0.25, 1.0, 0.85, 1.0)
+	else:
+		draw_instruction.modulate = Color(1.0, 1.0, 1.0, 0.85)
+
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
 	if image_texture == null:
