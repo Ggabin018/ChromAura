@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://audio_manager.gd" id="5_audio"]
 [ext_resource type="Shader" uid="uid://xt02x7ghojgo" path="res://shaders/background_waves.gdshader" id="5_bg_waves"]
 [ext_resource type="Shader" path="res://shaders/body_silhouette.gdshader" id="6_body_silhouette"]
+[ext_resource type="Script" uid="uid://dww50jea8wcpy" path="res://hand_gesture_engine.gd" id="7_gesture_engine"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_bg_waves"]
 shader = ExtResource("5_bg_waves")
@@ -48,11 +49,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_camera")
-model_path = null
-max_hands = null
-pointing_up_confidence = null
-depth_threshold = null
-show_hand_detection = null
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
 auto_start = true
@@ -82,6 +78,9 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 stretch_mode = 5
+
+[node name="HandGestureEngine" type="Node" parent="Control" unique_id=1427992933]
+script = ExtResource("7_gesture_engine")
 
 [node name="HandDetectionLayer" type="CanvasLayer" parent="Control" unique_id=925048862]
 layer = 2
