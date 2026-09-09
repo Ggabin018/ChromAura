@@ -32,7 +32,7 @@ func _ready() -> void:
 	gesture_status_label.visible = false
 
 	if _initialize_gesture_recognizer():
-		_set_status("Kinect & MediaPipe Initialized.")
+	#	_set_status("Kinect & MediaPipe Initialized.")
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
@@ -78,6 +78,8 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 		return
 	if image.get_format() != Image.FORMAT_RGB8:
 		image.convert(Image.FORMAT_RGB8)
+	
+	image.flip_x()
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
 	_recognition_pending = true
@@ -164,7 +166,7 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 		for x in range(width):
 			var depth := source.get_pixel(x, y).r
 			if depth >= depth_threshold:
-				depth_mask.set_pixel(x, y, Color(depth, 0, 0, 1))
+				depth_mask.set_pixel(width - 1 - x, y, Color(depth, 0, 0, 1))
 
 	$Particles.SetDepthImageMask(depth_mask)
 

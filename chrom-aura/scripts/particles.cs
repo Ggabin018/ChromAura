@@ -4,7 +4,7 @@ using System.Collections.Generic;
 
 public partial class particles : CanvasLayer
 {
-	[Export] public float TrailLifetime { get; set; } = 8f;
+	[Export] public float TrailLifetime { get; set; } = 5f;
 	[Export] public float BodyLifetime { get; set; } = 0.2f;
 	[Export] public int ParticlesPerSecond { get; set; } = 3200;
 	[Export] public int MaxBodyParticles { get; set; } = 5000;

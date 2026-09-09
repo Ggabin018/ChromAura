@@ -39,5 +39,5 @@ enabled=PackedStringArray("res://addons/GDMP/plugin.cfg", "res://addons/gd-depth
 
 [rendering]
 
-environment/defaults/default_clear_color=Color(0, 0, 0, 1)
 rendering_device/driver.windows="d3d12"
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)
