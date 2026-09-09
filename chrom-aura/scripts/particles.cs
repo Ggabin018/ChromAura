@@ -19,6 +19,18 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsque l'easter egg du cri de Wilhelm est déclenché.</summary>
 	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
 
+	[ExportGroup("Aura extérieure")]
+	[Export] public float OutwardLifetime { get; set; } = 0.35f;
+	[Export] public int OutwardParticlesPerSecond { get; set; } = 7500;
+	[Export] public int MaxOutwardParticles { get; set; } = 7000;
+	[Export] public int OutwardStride { get; set; } = 4;
+	[Export] public float OutwardSpeed { get; set; } = 40.0f;
+	[Export] public float OutwardSize { get; set; } = 10.0f;
+	[Export] public float OutwardGravity { get; set; } = 0.75f;
+	[Export] public float OutwardIntensity { get; set; } = 0.75f;
+	[Export] public float DepthFarThreshold { get; set; } = 0.67f;
+	[Export] public float DepthNearThreshold { get; set; } = 0.88f;
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
@@ -143,7 +155,7 @@ public partial class particles : CanvasLayer
 	/// <summary>Intensité lumineuse appliquée aux couleurs des palettes.</summary>
 	[Export] public float EtherealGlowIntensity { get; set; } = 1.15f;
 
-	/// <summary>Affiche l'overlay de débug (boîtes englobantes et centroïdes). Désactivé par défaut (Touche D).</summary>
+	/// <summary>Affiche l'overlay de débug (boîtes englobantes et centroïdes). Désactivé par défaut (Touche B).</summary>
 	[Export] public bool ShowBodyDebug { get; set; } = false;
 
 	/// <summary>Décalage manuel des palettes (Touche P) pour tester les 5 palettes avec un seul utilisateur.</summary>
@@ -162,6 +174,15 @@ public partial class particles : CanvasLayer
 	// =========================================================================
 	// ÉTAT INTERNE
 	// =========================================================================
+
+	private readonly List<EdgeSample> _edgePoints = new();
+	private GpuParticles2D _outwardParticleSystem = null!;
+	private float _outwardEmissionRemainder;
+	private float _meanEdgeDepth;
+	private bool _demoBodyEnabled;
+	private float _demoBodyOffsetX;
+	private float _demoBodyScale = 1.0f;
+	private float _demoBodyDepth;
 
 	private readonly BodyDetector _bodyDetector = new();
 	private readonly List<MaskSample> _maskPoints = new();
@@ -204,6 +225,8 @@ public partial class particles : CanvasLayer
 	public override void _Ready()
 	{
 		_random.Randomize();
+		_outwardParticleSystem = CreateOutwardParticleSystem();
+		AddChild(_outwardParticleSystem);
 
 		// Le premier enfant du CanvasLayer reste derrière toutes les particules corporelles.
 		_ambientFireflies = new AmbientFireflies
@@ -261,6 +284,10 @@ public partial class particles : CanvasLayer
 
 	public override void _Process(double delta)
 	{
+		// One global intensity based on the contour's average depth (or the demo depth).
+		var closeness = GetCloseness(_demoBodyEnabled ? _demoBodyDepth : _meanEdgeDepth);
+		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * Mathf.Lerp(0.4f, 1.0f, closeness);
+		_outwardParticleSystem.SelfModulate = new Color(outwardIntensity, outwardIntensity, outwardIntensity, 1.0f);
 		_elapsedTime += delta;
 		_lastFingerUpdateTime += delta;
 		var isPointingActive = _isPointingUp && (_lastFingerUpdateTime < 0.35);
@@ -296,6 +323,15 @@ public partial class particles : CanvasLayer
 		{
 			EmitSampledParticle(isPointingActive);
 		}
+
+		if (_edgePoints.Count == 0)
+			return;
+
+		_outwardEmissionRemainder += OutwardParticlesPerSecond * (float)delta;
+		var outwardParticleCount = Mathf.FloorToInt(_outwardEmissionRemainder);
+		_outwardEmissionRemainder -= outwardParticleCount;
+		for (var i = 0; i < outwardParticleCount; i++)
+			EmitOutwardParticle();
 	}
 
 	/// <summary>
@@ -305,8 +341,8 @@ public partial class particles : CanvasLayer
 	{
 		if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
 		{
-			// Touche D : Bascule de l'affichage des boîtes de débug
-			if (keyEvent.Keycode == Key.D)
+			// Touche B : Bascule de l'affichage des boîtes de débug
+			if (keyEvent.Keycode == Key.B)
 			{
 				ShowBodyDebug = !ShowBodyDebug;
 				if (_debugOverlay != null)
@@ -471,13 +507,13 @@ public partial class particles : CanvasLayer
 	private void EmitSampledParticle(bool isPointingActive)
 	{
 		var sample = _maskPoints[_random.RandiRange(0, _maskPoints.Count - 1)];
-		var screenPos = MaskToScreen(sample.Position);
+		var screenPos = BodyMaskToScreen(sample.Position);
 
 		var palettes = BodyPalette.DefaultPalettes;
 		var paletteIndex = sample.PaletteIndex % palettes.Length;
 		var palette = palettes[paletteIndex];
 
-		// La profondeur pilote à la fois la couleur et la proportion de scintillements.
+		// Main's calibrated depth normalization remains authoritative for the body.
 		var closeness = _NormalizeDepth(sample.NormalizedDepth);
 		var bodyColor = ColorFromDepth ? palette.EvaluateBody(closeness) : palette.ColorNear;
 		var sparkleChance = Mathf.Lerp(0.01f, 0.85f, Mathf.Pow(closeness, 1.8f));
@@ -1035,4 +1071,205 @@ public partial class particles : CanvasLayer
 		}
 		return ImageTexture.CreateFromImage(image);
 	}
+
+	private void CacheEdges(Image depthImage)
+	{
+		using var rgbImage = (Image)depthImage.Duplicate();
+		rgbImage.Convert(Image.Format.Rgb8);
+		var pixels = rgbImage.GetData();
+		var width = rgbImage.GetWidth();
+		var height = rgbImage.GetHeight();
+		_edgePoints.Clear();
+		var edgeStride = Mathf.Max(OutwardStride, 1);
+		for (var y = 0; y < height; y += edgeStride)
+		{
+			for (var x = 0; x < width; x += edgeStride)
+			{
+				// Keep one actual boundary pixel per cell, rather than testing only the
+				// grid intersection (which misses entire horizontal/vertical edges).
+				var count = 0;
+				var edgeX = x;
+				var edgeY = y;
+				for (var cy = y; cy < Mathf.Min(y + edgeStride, height); cy++)
+				{
+					for (var cx = x; cx < Mathf.Min(x + edgeStride, width); cx++)
+					{
+						if (IsBackground(pixels, cx, cy, width, height))
+							continue;
+						if (!IsBackground(pixels, cx - 1, cy, width, height)
+							&& !IsBackground(pixels, cx + 1, cy, width, height)
+							&& !IsBackground(pixels, cx, cy - 1, width, height)
+							&& !IsBackground(pixels, cx, cy + 1, width, height))
+							continue;
+						count++;
+						if (_random.RandiRange(1, count) == 1)
+						{
+							edgeX = cx;
+							edgeY = cy;
+						}
+					}
+				}
+				if (count == 0)
+					continue;
+				var normal = FindOutwardNormal(pixels, edgeX, edgeY, width, height);
+				if (normal.LengthSquared() > 0.001f)
+					_edgePoints.Add(new EdgeSample(new Vector2(edgeX, edgeY), normal.Normalized(),
+						pixels[(edgeY * width + edgeX) * 3] / 255.0f));
+			}
+		}
+		// Keep the last depth when the body disappears so the remaining mist fades naturally.
+		if (_edgePoints.Count > 0)
+		{
+			var depthSum = 0.0f;
+			foreach (var edge in _edgePoints)
+				depthSum += edge.NormalizedDepth;
+			_meanEdgeDepth = depthSum / _edgePoints.Count;
+		}
+	}
+
+	public void SetDemoBodyTransform(bool enabled, float offsetX, float scale, float depth)
+	{
+		_demoBodyEnabled = enabled;
+		_demoBodyOffsetX = offsetX;
+		_demoBodyScale = Mathf.Max(0.01f, scale);
+		_demoBodyDepth = Mathf.Clamp(depth, 0.0f, 1.0f);
+		if (enabled)
+			foreach (var body in _bodyDetector.TrackedBodies)
+				body.AvgDepth = _demoBodyDepth;
+		if (ShowBodyDebug) _debugOverlay.QueueRedraw();
+	}
+
+	private void EmitOutwardParticle()
+	{
+		var edge = _edgePoints[_random.RandiRange(0, _edgePoints.Count - 1)];
+		var closeness = GetCloseness(_demoBodyEnabled ? _demoBodyDepth : edge.NormalizedDepth);
+		if (_random.Randf() > Mathf.Lerp(0.28f, 1.0f, closeness))
+			return;
+
+		var normal = MaskDirectionToScreen(edge.OutwardNormal);
+		var screenPosition = BodyMaskToScreen(edge.Position) + normal * _random.RandfRange(0.0f, 2.0f);
+		// Share the density's depth thresholds: 40% speed far away, full speed up close.
+		var depthSpeed = Mathf.Max(0.0f, OutwardSpeed) * Mathf.Lerp(0.4f, 1.0f, closeness);
+		// A small outward cone breaks up repeated thin jets, without reversing the normal.
+		var outwardVelocity = normal.Rotated(_random.RandfRange(-0.22f, 0.22f))
+			* depthSpeed * _random.RandfRange(0.9f, 1.1f);
+
+		_outwardParticleSystem.EmitParticle(
+			new Transform2D(0.0f, screenPosition),
+			outwardVelocity,
+			Colors.White, Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity));
+	}
+
+	private float GetCloseness(float normalizedDepth)
+	{
+		var depthSpan = Mathf.Max(0.01f, DepthNearThreshold - DepthFarThreshold);
+		return Mathf.Clamp((normalizedDepth - DepthFarThreshold) / depthSpan, 0.0f, 1.0f);
+	}
+
+	private static Vector2 FindOutwardNormal(byte[] mask, int x, int y, int width, int height)
+	{
+		var normal = Vector2.Zero;
+		// Wider occupancy gradient smooths the staircase normals of curved silhouettes.
+		for (var dy = -3; dy <= 3; dy++)
+		{
+			for (var dx = -3; dx <= 3; dx++)
+			{
+				var distanceSquared = dx * dx + dy * dy;
+				if (distanceSquared == 0 || distanceSquared > 9)
+					continue;
+				if (IsBackground(mask, x + dx, y + dy, width, height))
+					normal += new Vector2(dx, dy) / distanceSquared;
+			}
+		}
+		return normal;
+	}
+
+	private static bool IsBackground(byte[] mask, int x, int y, int width, int height)
+	{
+		return x < 0 || y < 0 || x >= width || y >= height || mask[(y * width + x) * 3] == 0;
+	}
+
+	public Vector2 BodyMaskToScreen(Vector2 maskPoint)
+	{
+		if (_demoBodyEnabled)
+		{
+			var center = new Vector2(_maskSize.X, _maskSize.Y) * 0.5f;
+			maskPoint = center + (maskPoint - center) * _demoBodyScale + new Vector2(_demoBodyOffsetX, 0.0f);
+		}
+		return MaskToScreen(maskPoint);
+	}
+
+	private Vector2 MaskDirectionToScreen(Vector2 maskDirection)
+	{
+		var viewport = GetViewport().GetVisibleRect().Size;
+		var scaleX = viewport.X / Mathf.Max(_maskSize.X, 1);
+		var scaleY = viewport.Y / Mathf.Max(_maskSize.Y, 1);
+		var direction = PreserveAspectRatio
+			? maskDirection
+			: new Vector2(maskDirection.X / Mathf.Max(scaleX, 0.001f), maskDirection.Y / Mathf.Max(scaleY, 0.001f));
+		return direction.Normalized();
+	}
+
+	private GpuParticles2D CreateOutwardParticleSystem()
+	{
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		alphaCurve.AddPoint(new Vector2(0.12f, 0.8f));
+		alphaCurve.AddPoint(new Vector2(0.72f, 0.8f));
+		alphaCurve.AddPoint(new Vector2(0.88f, 0.4f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.45f));
+		scaleCurve.AddPoint(new Vector2(0.4f, 0.7f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 1.0f));
+
+		// A full HSV turn while alpha is visible; fading is controlled ONLY by AlphaCurve.
+		var hueRamp = new Gradient();
+		hueRamp.SetColor(0, Color.FromHsv(0.5f, 1.0f, 1.0f));
+		hueRamp.SetColor(1, Color.FromHsv(0.5f, 1.0f, 1.0f));
+		for (var i = 0; i <= 24; i++)
+		{
+			var progress = i / 24.0f;
+			var hue = Mathf.PosMod(0.5f - progress, 1.0f);
+			hueRamp.AddPoint(0.10f + progress * 0.65f, Color.FromHsv(hue, 1.0f, 1.0f));
+		}
+
+		var material = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = new Vector3(0.0f, OutwardGravity, 0.0f),
+			InitialVelocityMin = 0.0f,
+			InitialVelocityMax = 0.0f,
+			DampingMin = 0.45f,
+			DampingMax = 1.2f,
+			ScaleMin = Mathf.Max(1.0f, OutwardSize) / 64.0f * 0.85f,
+			ScaleMax = Mathf.Max(1.0f, OutwardSize) / 64.0f * 1.15f,
+			ScaleCurve = new CurveTexture { Curve = scaleCurve },
+			AlphaCurve = new CurveTexture { Curve = alphaCurve },
+			ColorRamp = new GradientTexture1D { Gradient = hueRamp },
+			Color = Colors.White,
+		};
+
+		var canvasMaterial = new CanvasItemMaterial
+		{
+			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
+			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
+		};
+
+		return new GpuParticles2D
+		{
+			Material = canvasMaterial,
+			Amount = MaxOutwardParticles,
+			Lifetime = OutwardLifetime,
+			LocalCoords = false,
+			Emitting = false,
+			Texture = CreateMistTexture(64),
+			ProcessMaterial = material,
+			VisibilityRect = new Rect2(-300, -300, 10600, 10600),
+		};
+	}
+
+	private readonly record struct EdgeSample(Vector2 Position, Vector2 OutwardNormal, float NormalizedDepth);
 }
