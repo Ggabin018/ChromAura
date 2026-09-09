@@ -33,10 +33,7 @@ godot --headless --path chrom-aura \
   --script res://tests/test_hand_gesture_engine.gd
 ```
 
-## Camera source
+## Camera input
 
-The Kinect is the default source and provides both the RGB stream used by
-MediaPipe and the depth stream used by the particle renderer. For webcam-only
-development, select the root `Control` node in `main.tscn` and change
-**Camera > Camera Source** from `KINECT` to `WEBCAM`. No code or scene
-connection needs to be changed.
+The Kinect provides both camera inputs: its RGB stream is sent to MediaPipe for
+hand landmark extraction, while its depth stream feeds the particle renderer.
