@@ -6,8 +6,8 @@ MediaPipe is used only to extract the 21 two-dimensional and three-dimensional
 hand landmarks. Gesture classification, multi-hand tracking and temporal
 stabilization are implemented by `HandGestureEngine` in Godot.
 
-The engine currently emits `INDEX_POINTING` and `THUMB_UP` through these
-signals:
+The engine currently recognizes `INDEX_POINTING`, `INDEX_MIDDLE_POINTING` and
+`THUMB_UP`, and reports them through these signals:
 
 ```gdscript
 @onready var gestures: HandGestureEngine = $HandGestureEngine

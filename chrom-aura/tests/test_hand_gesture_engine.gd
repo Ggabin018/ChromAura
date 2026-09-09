@@ -56,6 +56,34 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		"horizontal thumb as thumb up",
 	)
 
+	var two_finger_pointing := _make_pose(HandGestureEngine.INDEX_MIDDLE_POINTING)
+	var two_finger_scores := engine.classify_pose(two_finger_pointing)
+	_expect_score(
+		two_finger_scores,
+		HandGestureEngine.INDEX_MIDDLE_POINTING,
+		engine.activation_threshold,
+		"two-finger pointing",
+	)
+	_expect_below(
+		two_finger_scores,
+		HandGestureEngine.INDEX_POINTING,
+		engine.maintenance_threshold,
+		"two-finger pointing as index pointing",
+	)
+	var pointing_with_thumb_up := _make_pose(HandGestureEngine.INDEX_MIDDLE_POINTING)
+	var points_with_thumb_up := pointing_with_thumb_up.landmarks_3d
+	_set_thumb_up(points_with_thumb_up)
+	pointing_with_thumb_up.landmarks_3d = points_with_thumb_up
+	pointing_with_thumb_up.landmarks_2d = _world_to_uv(points_with_thumb_up)
+	pointing_with_thumb_up.update_geometry()
+	var thumb_independent_scores := engine.classify_pose(pointing_with_thumb_up)
+	_expect_score(
+		thumb_independent_scores,
+		HandGestureEngine.INDEX_MIDDLE_POINTING,
+		engine.activation_threshold,
+		"two-finger pointing with thumb up",
+	)
+
 	var open_palm := _make_pose(&"OPEN_PALM")
 	var open_scores := engine.classify_pose(open_palm)
 	_expect_below(
@@ -149,16 +177,23 @@ func _make_pose(gesture: StringName) -> HandPose:
 	points[2] = Vector3(-0.62, 0.0, 0.0)
 	points[3] = Vector3(-0.52, 0.18, 0.0)
 	points[4] = Vector3(-0.30, 0.08, 0.0)
-	_set_finger(points, 5, gesture == HandGestureEngine.INDEX_POINTING or gesture == &"OPEN_PALM")
-	_set_finger(points, 9, gesture == &"OPEN_PALM")
+	_set_finger(
+		points,
+		5,
+		gesture == HandGestureEngine.INDEX_POINTING
+		or gesture == HandGestureEngine.INDEX_MIDDLE_POINTING
+		or gesture == &"OPEN_PALM",
+	)
+	_set_finger(
+		points,
+		9,
+		gesture == HandGestureEngine.INDEX_MIDDLE_POINTING or gesture == &"OPEN_PALM",
+	)
 	_set_finger(points, 13, gesture == &"OPEN_PALM")
 	_set_finger(points, 17, gesture == &"OPEN_PALM")
 
 	if gesture == HandGestureEngine.THUMB_UP:
-		points[1] = Vector3(-0.42, -0.12, 0.0)
-		points[2] = Vector3(-0.42, 0.28, 0.0)
-		points[3] = Vector3(-0.42, 0.68, 0.0)
-		points[4] = Vector3(-0.42, 1.10, 0.0)
+		_set_thumb_up(points)
 
 	var pose := HandPose.new()
 	pose.landmarks_3d = points
@@ -167,6 +202,13 @@ func _make_pose(gesture: StringName) -> HandPose:
 	pose.handedness_score = 0.99
 	pose.update_geometry()
 	return pose
+
+
+func _set_thumb_up(points: PackedVector3Array) -> void:
+	points[1] = Vector3(-0.42, -0.12, 0.0)
+	points[2] = Vector3(-0.42, 0.28, 0.0)
+	points[3] = Vector3(-0.42, 0.68, 0.0)
+	points[4] = Vector3(-0.42, 1.10, 0.0)
 
 
 func _set_finger(points: PackedVector3Array, mcp_index: int, extended: bool) -> void:

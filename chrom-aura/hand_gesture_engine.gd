@@ -14,6 +14,7 @@ signal gesture_ended(detection: GestureDetection)
 signal hand_lost(track_id: int)
 
 const INDEX_POINTING: StringName = &"INDEX_POINTING"
+const INDEX_MIDDLE_POINTING: StringName = &"INDEX_MIDDLE_POINTING"
 const THUMB_UP: StringName = &"THUMB_UP"
 
 const WRIST := 0
@@ -174,13 +175,27 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	var middle_folded := _finger_folded_score(
 		landmarks, MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP
 	)
-	var ring_folded := _finger_folded_score(landmarks, RING_MCP, RING_PIP, RING_DIP, RING_TIP)
-	var pinky_folded := _finger_folded_score(landmarks, PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP)
+	var middle_extended := _finger_extended_score(
+		landmarks, MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP
+	)
+	var ring_folded := _finger_folded_score(
+		landmarks, RING_MCP, RING_PIP, RING_DIP, RING_TIP
+	)
+	var pinky_folded := _finger_folded_score(
+		landmarks, PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP
+	)
 	var non_index_folded := minf(middle_folded, minf(ring_folded, pinky_folded))
 	var pointing_score := 0.55 * index_extended + 0.45 * non_index_folded
+	var two_finger_extension := minf(index_extended, middle_extended)
+	var remaining_fingers_folded := minf(ring_folded, pinky_folded)
+	var two_finger_pointing_score := (
+		0.65 * two_finger_extension + 0.35 * remaining_fingers_folded
+	)
 
 	var thumb_extended := _thumb_extended_score(landmarks)
-	var index_folded := _finger_folded_score(landmarks, INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP)
+	var index_folded := _finger_folded_score(
+		landmarks, INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP
+	)
 	var all_fingers_folded := minf(index_folded, non_index_folded)
 	var thumb_direction := (pose.landmarks_2d[THUMB_TIP] - pose.landmarks_2d[THUMB_IP]).normalized()
 	var upward_alignment := thumb_direction.dot(Vector2.UP)
@@ -190,6 +205,7 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 
 	return {
 		INDEX_POINTING: clampf(pointing_score, 0.0, 1.0),
+		INDEX_MIDDLE_POINTING: clampf(two_finger_pointing_score, 0.0, 1.0),
 		THUMB_UP: clampf(thumb_up_score, 0.0, 1.0),
 	}
 
@@ -431,6 +447,15 @@ func _make_detection(
 	if gesture == INDEX_POINTING:
 		anchor = track.pose.landmarks_2d[INDEX_TIP]
 		direction = (anchor - track.pose.landmarks_2d[INDEX_DIP]).normalized()
+	elif gesture == INDEX_MIDDLE_POINTING:
+		anchor = track.pose.landmarks_2d[INDEX_TIP]
+		var index_direction := (
+			track.pose.landmarks_2d[INDEX_TIP] - track.pose.landmarks_2d[INDEX_DIP]
+		).normalized()
+		var middle_direction := (
+			track.pose.landmarks_2d[MIDDLE_TIP] - track.pose.landmarks_2d[MIDDLE_DIP]
+		).normalized()
+		direction = (index_direction + middle_direction).normalized()
 	elif gesture == THUMB_UP:
 		anchor = track.pose.landmarks_2d[THUMB_TIP]
 		direction = (anchor - track.pose.landmarks_2d[THUMB_IP]).normalized()
