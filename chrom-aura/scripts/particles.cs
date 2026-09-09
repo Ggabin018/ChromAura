@@ -4,33 +4,45 @@ using System.Collections.Generic;
 
 public partial class particles : CanvasLayer
 {
-	[Export] public float TrailLifetime { get; set; } = 5f;
-	[Export] public float BodyLifetime { get; set; } = 0.2f;
-	[Export] public int ParticlesPerSecond { get; set; } = 3200;
-	[Export] public int MaxBodyParticles { get; set; } = 5000;
+	[Export] public float TrailLifetime { get; set; } = 4.0f;
+	[Export] public float MistLifetime { get; set; } = 0.38f;
+	[Export] public float SparkleLifetime { get; set; } = 0.22f;
+	[Export] public int ParticlesPerSecond { get; set; } = 38000;
+	[Export] public int MaxMistParticles { get; set; } = 35000;
+	[Export] public int MaxSparkleParticles { get; set; } = 30000;
 	[Export] public int MaxTrailParticles { get; set; } = 25000;
-	[Export] public float HandPersistentRadius { get; set; } = 45.0f;
+	[Export] public float HandPersistentRadius { get; set; } = 38.0f;
 	[Export] public bool PreserveAspectRatio { get; set; } = true;
 	[Export] public bool ColorFromDepth { get; set; } = true;
-	[Export] public int Stride { get; set; } = 3;
+	[Export] public int Stride { get; set; } = 2;
+	[Export] public float EtherealGlowIntensity { get; set; } = 1.15f;
+	[Export] public float DepthFarThreshold { get; set; } = 0.67f;
+	[Export] public float DepthNearThreshold { get; set; } = 0.88f;
 
 	private readonly List<MaskSample> _maskPoints = new();
 	private readonly List<Vector2> _currentFingers = new();
 	private readonly List<Vector2> _prevFingerScreenPos = new();
 	private readonly RandomNumberGenerator _random = new();
 
-	private GpuParticles2D _particleSystem = null!;
+	private GpuParticles2D _mistParticleSystem = null!;
+	private GpuParticles2D _sparkleParticleSystem = null!;
 	private GpuParticles2D _trailParticleSystem = null!;
+
 	private Vector2I _maskSize = new(640, 480);
 	private float _emissionRemainder;
 	private bool _isPointingUp;
 	private double _lastFingerUpdateTime;
+	private double _elapsedTime;
 
 	public override void _Ready()
 	{
 		_random.Randomize();
-		_particleSystem = CreateBodyParticleSystem();
-		AddChild(_particleSystem);
+
+		_mistParticleSystem = CreateMistParticleSystem();
+		AddChild(_mistParticleSystem);
+
+		_sparkleParticleSystem = CreateSparkleParticleSystem();
+		AddChild(_sparkleParticleSystem);
 
 		_trailParticleSystem = CreateTrailParticleSystem();
 		AddChild(_trailParticleSystem);
@@ -38,6 +50,7 @@ public partial class particles : CanvasLayer
 
 	public override void _Process(double delta)
 	{
+		_elapsedTime += delta;
 		_lastFingerUpdateTime += delta;
 		var isPointingActive = _isPointingUp && (_lastFingerUpdateTime < 0.35);
 
@@ -51,15 +64,18 @@ public partial class particles : CanvasLayer
 			_prevFingerScreenPos.Clear();
 		}
 
-		// Emit body / hand silhouette particles from Kinect depth mask
+		// Emit body / silhouette particles from depth mask
 		if (_maskPoints.Count == 0)
 			return;
 
 		_emissionRemainder += ParticlesPerSecond * (float)delta;
 		var particleCount = Mathf.FloorToInt(_emissionRemainder);
 		_emissionRemainder -= particleCount;
+
 		for (var i = 0; i < particleCount; i++)
+		{
 			EmitSampledParticle(isPointingActive);
+		}
 	}
 
 	public void UpdatePointingState(bool isPointing, Godot.Collections.Array<Vector2> pointingFingers)
@@ -91,12 +107,13 @@ public partial class particles : CanvasLayer
 			for (var x = 0; x < width; x += Stride)
 			{
 				var depth = depthImage.GetPixel(x, y).R;
-				if (depth == 0.0f)
+				if (depth <= 0.001f)
 					continue;
 
 				var position = new Vector2(
-					x + _random.Randf() * Stride,
-					y + _random.Randf() * Stride);
+					x + _random.RandfRange(-0.35f, 0.35f) * Stride,
+					y + _random.RandfRange(-0.35f, 0.35f) * Stride);
+
 				_maskPoints.Add(new MaskSample(position, depth));
 			}
 		}
@@ -122,8 +139,7 @@ public partial class particles : CanvasLayer
 
 			if (distance < 500.0f)
 			{
-				// Interpolate along movement path so rapid strokes stay continuous and smooth
-				var steps = Mathf.Max(2, Mathf.CeilToInt(distance / 3.0f));
+				var steps = Mathf.Max(2, Mathf.CeilToInt(distance / 1.8f));
 				for (var s = 0; s <= steps; s++)
 				{
 					var t = (float)s / steps;
@@ -133,8 +149,7 @@ public partial class particles : CanvasLayer
 			}
 			else
 			{
-				// New hand position / teleport: emit around current position
-				for (var s = 0; s < 4; s++)
+				for (var s = 0; s < 5; s++)
 				{
 					EmitSingleTrailParticle(currentScreen);
 				}
@@ -147,21 +162,31 @@ public partial class particles : CanvasLayer
 	private void EmitSingleTrailParticle(Vector2 basePosition)
 	{
 		var offset = new Vector2(
-			_random.RandfRange(-6.0f, 6.0f),
-			_random.RandfRange(-6.0f, 6.0f));
+			_random.RandfRange(-2.0f, 2.0f),
+			_random.RandfRange(-2.0f, 2.0f));
 		var drift = new Vector2(
-			_random.RandfRange(-5.0f, 5.0f),
-			_random.RandfRange(-6.0f, 4.0f));
+			_random.RandfRange(-1.5f, 1.5f),
+			_random.RandfRange(-3.0f, 1.0f));
 
-		// Radiant cyan to violet drawing color palette
-		var color = new Color(0.25f, 0.95f, 1.0f, 0.98f).Lerp(
-			new Color(0.85f, 0.35f, 1.0f, 0.98f),
-			_random.Randf());
+		var hueChoice = _random.Randf();
+		Color trailColor;
+		if (hueChoice < 0.45f)
+		{
+			trailColor = new Color(0.15f, 0.85f, 1.0f, 0.85f).Lerp(new Color(0.65f, 0.25f, 1.0f, 0.85f), _random.Randf());
+		}
+		else if (hueChoice < 0.8f)
+		{
+			trailColor = new Color(1.0f, 0.35f, 0.85f, 0.85f).Lerp(new Color(0.35f, 0.95f, 0.8f, 0.85f), _random.Randf());
+		}
+		else
+		{
+			trailColor = new Color(1.0f, 0.92f, 0.55f, 0.90f);
+		}
 
 		_trailParticleSystem.EmitParticle(
 			new Transform2D(0.0f, basePosition + offset),
 			drift,
-			color,
+			trailColor * EtherealGlowIntensity,
 			Colors.White,
 			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
 	}
@@ -171,7 +196,10 @@ public partial class particles : CanvasLayer
 		var sample = _maskPoints[_random.RandiRange(0, _maskPoints.Count - 1)];
 		var screenPos = MaskToScreen(sample.Position);
 
-		// Check if this sample is on or near the pointing hand
+		// Absolute distance from camera: 0.0 (far ~0.67) -> 1.0 (close ~0.88+)
+		var depthSpan = Mathf.Max(0.01f, DepthNearThreshold - DepthFarThreshold);
+		var closeness = Mathf.Clamp((sample.NormalizedDepth - DepthFarThreshold) / depthSpan, 0.0f, 1.0f);
+
 		var isNearPointingHand = false;
 		if (isPointingActive && _currentFingers.Count > 0)
 		{
@@ -186,19 +214,69 @@ public partial class particles : CanvasLayer
 			}
 		}
 
-		var drift = new Vector2(_random.RandfRange(-8.0f, 8.0f), _random.RandfRange(-11.0f, 4.0f));
-		var color = ColorFromDepth
-			? new Color(0.2f, 0.95f, 1.0f, 0.95f).Lerp(new Color(0.85f, 0.25f, 1.0f, 0.95f), sample.NormalizedDepth)
-			: new Color(0.18f, 0.82f, 1.0f, 0.92f);
+		// Far = 100% fine misty soft nebula dust (low sparkle chance 0.01)
+		// Close = heavily sparkling crystalline diamonds & glittering starlight (sparkle chance up to 0.85)
+		var sparkleChance = Mathf.Lerp(0.01f, 0.85f, Mathf.Pow(closeness, 1.8f));
+		if (isNearPointingHand)
+		{
+			sparkleChance = 0.88f;
+		}
 
-		var targetSystem = isNearPointingHand ? _trailParticleSystem : _particleSystem;
-		var finalDrift = isNearPointingHand ? drift * 0.4f : drift;
-		targetSystem.EmitParticle(
-			new Transform2D(0.0f, screenPos),
-			finalDrift,
-			color,
-			Colors.White,
-			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
+		var isSparkle = _random.Randf() < sparkleChance;
+
+		if (isSparkle)
+		{
+			// Sparkle: Crisp diamond starlight with sparkling twinkle
+			var sparkleDrift = new Vector2(
+				_random.RandfRange(-2.2f, 2.2f),
+				_random.RandfRange(-3.0f, 1.2f));
+
+			Color sparkleColor;
+			var sparkleType = _random.Randf();
+			if (sparkleType < 0.40f)
+				sparkleColor = new Color(1.0f, 1.0f, 1.0f, 0.98f); // Pure diamond starlight
+			else if (sparkleType < 0.70f)
+				sparkleColor = new Color(0.35f, 0.95f, 1.0f, 0.95f); // Electric diamond cyan
+			else if (sparkleType < 0.88f)
+				sparkleColor = new Color(1.0f, 0.50f, 0.95f, 0.95f); // Crystal magenta
+			else
+				sparkleColor = new Color(1.0f, 0.92f, 0.45f, 0.98f); // Radiant gold
+
+			var targetSystem = isNearPointingHand ? _trailParticleSystem : _sparkleParticleSystem;
+			targetSystem.EmitParticle(
+				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-1.0f, 1.0f), _random.RandfRange(-1.0f, 1.0f))),
+				sparkleDrift,
+				sparkleColor * EtherealGlowIntensity,
+				Colors.White,
+				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
+		}
+		else
+		{
+			// Mist: Soft dreamy nebula dust preserving the exact far look
+			var wave = (float)Math.Sin(_elapsedTime * 1.5 + sample.Position.Y * 0.008f) * 0.12f;
+			var harmonicDepth = Mathf.Clamp(closeness + wave, 0.0f, 1.0f);
+
+			var farMist = new Color(0.28f, 0.12f, 0.65f, 0.32f).Lerp(
+				new Color(0.06f, 0.70f, 0.85f, 0.35f),
+				harmonicDepth);
+
+			var nearMist = new Color(0.12f, 0.88f, 1.0f, 0.42f).Lerp(
+				new Color(0.92f, 0.30f, 0.82f, 0.42f),
+				harmonicDepth);
+
+			var mistColor = farMist.Lerp(nearMist, closeness) * EtherealGlowIntensity;
+
+			var mistDrift = new Vector2(
+				_random.RandfRange(-0.9f, 0.9f),
+				_random.RandfRange(-1.5f, 0.4f));
+
+			_mistParticleSystem.EmitParticle(
+				new Transform2D(0.0f, screenPos + new Vector2(_random.RandfRange(-0.8f, 0.8f), _random.RandfRange(-0.8f, 0.8f))),
+				mistDrift,
+				mistColor,
+				Colors.White,
+				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color));
+		}
 	}
 
 	private Vector2 NormalizedToScreen(Vector2 normalized)
@@ -223,28 +301,104 @@ public partial class particles : CanvasLayer
 		return new Vector2(x, y);
 	}
 
-	private GpuParticles2D CreateBodyParticleSystem()
+	private GpuParticles2D CreateMistParticleSystem()
 	{
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		alphaCurve.AddPoint(new Vector2(0.18f, 0.65f));
+		alphaCurve.AddPoint(new Vector2(0.65f, 0.55f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var alphaTexture = new CurveTexture { Curve = alphaCurve };
+
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.35f));
+		scaleCurve.AddPoint(new Vector2(0.3f, 0.6f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 0.25f));
+
+		var scaleTexture = new CurveTexture { Curve = scaleCurve };
+
 		var material = new ParticleProcessMaterial
 		{
 			ParticleFlagDisableZ = true,
-			Gravity = Vector3.Zero,
+			Gravity = new Vector3(0.0f, -1.0f, 0.0f),
 			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 0.0f,
+			InitialVelocityMax = 1.5f,
 			DampingMin = 2.0f,
-			DampingMax = 5.0f,
-			ScaleMin = 0.55f,
-			ScaleMax = 1.25f,
+			DampingMax = 4.0f,
+			ScaleMin = 0.22f,
+			ScaleMax = 0.48f,
+			ScaleCurve = scaleTexture,
+			AlphaCurve = alphaTexture,
 			Color = Colors.White,
+		};
+
+		var canvasMaterial = new CanvasItemMaterial
+		{
+			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
+			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
 		};
 
 		return new GpuParticles2D
 		{
-			Amount = MaxBodyParticles,
-			Lifetime = BodyLifetime,
+			Material = canvasMaterial,
+			Amount = MaxMistParticles,
+			Lifetime = MistLifetime,
 			LocalCoords = false,
 			Emitting = false,
-			Texture = CreateSoftParticleTexture(20),
+			Texture = CreateMistTexture(14),
+			ProcessMaterial = material,
+			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
+		};
+	}
+
+	private GpuParticles2D CreateSparkleParticleSystem()
+	{
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		alphaCurve.AddPoint(new Vector2(0.10f, 1.0f));
+		alphaCurve.AddPoint(new Vector2(0.45f, 0.95f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var alphaTexture = new CurveTexture { Curve = alphaCurve };
+
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.2f));
+		scaleCurve.AddPoint(new Vector2(0.20f, 1.0f));
+		scaleCurve.AddPoint(new Vector2(0.60f, 0.7f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
+
+		var scaleTexture = new CurveTexture { Curve = scaleCurve };
+
+		var material = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = new Vector3(0.0f, -0.8f, 0.0f),
+			InitialVelocityMin = 0.0f,
+			InitialVelocityMax = 3.0f,
+			DampingMin = 3.0f,
+			DampingMax = 6.0f,
+			ScaleMin = 0.28f,
+			ScaleMax = 0.65f,
+			ScaleCurve = scaleTexture,
+			AlphaCurve = alphaTexture,
+			Color = Colors.White,
+		};
+
+		var canvasMaterial = new CanvasItemMaterial
+		{
+			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
+			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
+		};
+
+		return new GpuParticles2D
+		{
+			Material = canvasMaterial,
+			Amount = MaxSparkleParticles,
+			Lifetime = SparkleLifetime,
+			LocalCoords = false,
+			Emitting = false,
+			Texture = CreateSparkleTexture(16),
 			ProcessMaterial = material,
 			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
 		};
@@ -253,8 +407,9 @@ public partial class particles : CanvasLayer
 	private GpuParticles2D CreateTrailParticleSystem()
 	{
 		var gradient = new Gradient();
-		gradient.SetColor(0, new Color(1, 1, 1, 1.0f));
-		gradient.AddPoint(0.7f, new Color(1, 1, 1, 0.9f));
+		gradient.SetColor(0, new Color(1, 1, 1, 0.95f));
+		gradient.AddPoint(0.4f, new Color(1, 1, 1, 0.85f));
+		gradient.AddPoint(0.8f, new Color(1, 1, 1, 0.45f));
 		gradient.AddPoint(1.0f, new Color(1, 1, 1, 0.0f));
 
 		var colorRamp = new GradientTexture1D
@@ -262,33 +417,49 @@ public partial class particles : CanvasLayer
 			Gradient = gradient,
 		};
 
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.3f));
+		scaleCurve.AddPoint(new Vector2(0.2f, 0.65f));
+		scaleCurve.AddPoint(new Vector2(0.7f, 0.4f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
+
+		var scaleTexture = new CurveTexture { Curve = scaleCurve };
+
 		var material = new ParticleProcessMaterial
 		{
 			ParticleFlagDisableZ = true,
-			Gravity = new Vector3(0.0f, 4.0f, 0.0f),
+			Gravity = new Vector3(0.0f, 1.8f, 0.0f),
 			InitialVelocityMin = 0.0f,
-			InitialVelocityMax = 6.0f,
-			DampingMin = 2.0f,
-			DampingMax = 5.0f,
-			ScaleMin = 0.7f,
-			ScaleMax = 1.5f,
+			InitialVelocityMax = 2.0f,
+			DampingMin = 1.5f,
+			DampingMax = 3.0f,
+			ScaleMin = 0.25f,
+			ScaleMax = 0.55f,
+			ScaleCurve = scaleTexture,
 			ColorRamp = colorRamp,
 			Color = Colors.White,
 		};
 
+		var canvasMaterial = new CanvasItemMaterial
+		{
+			BlendMode = CanvasItemMaterial.BlendModeEnum.Add,
+			LightMode = CanvasItemMaterial.LightModeEnum.Unshaded,
+		};
+
 		return new GpuParticles2D
 		{
+			Material = canvasMaterial,
 			Amount = MaxTrailParticles,
 			Lifetime = TrailLifetime,
 			LocalCoords = false,
 			Emitting = false,
-			Texture = CreateSoftParticleTexture(22),
+			Texture = CreateSparkleTexture(14),
 			ProcessMaterial = material,
 			VisibilityRect = new Rect2(-200, -200, 10000, 10000),
 		};
 	}
 
-	private static ImageTexture CreateSoftParticleTexture(int size)
+	private static ImageTexture CreateMistTexture(int size)
 	{
 		var image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
 		var center = (size - 1) * 0.5f;
@@ -297,8 +468,46 @@ public partial class particles : CanvasLayer
 			for (var x = 0; x < size; x++)
 			{
 				var distance = new Vector2(x - center, y - center).Length() / center;
-				var alpha = Mathf.Clamp(1.0f - distance, 0.0f, 1.0f);
-				image.SetPixel(x, y, new Color(1, 1, 1, alpha * alpha));
+				if (distance >= 1.0f)
+				{
+					image.SetPixel(x, y, new Color(1, 1, 1, 0));
+					continue;
+				}
+
+				var linear = 1.0f - distance;
+				var alpha = Mathf.Pow(linear, 1.8f) * 0.75f;
+				image.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp(alpha, 0.0f, 1.0f)));
+			}
+		}
+		return ImageTexture.CreateFromImage(image);
+	}
+
+	private static ImageTexture CreateSparkleTexture(int size)
+	{
+		var image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
+		var center = (size - 1) * 0.5f;
+
+		for (var y = 0; y < size; y++)
+		{
+			for (var x = 0; x < size; x++)
+			{
+				var offset = new Vector2(x - center, y - center);
+				var distance = offset.Length() / center;
+				if (distance >= 1.0f)
+				{
+					image.SetPixel(x, y, new Color(1, 1, 1, 0));
+					continue;
+				}
+
+				var nx = Math.Abs(offset.X) / center;
+				var ny = Math.Abs(offset.Y) / center;
+
+				var core = Mathf.Pow(Mathf.Clamp(1.0f - distance * 2.2f, 0.0f, 1.0f), 2.0f);
+				var hRay = Mathf.Pow(Mathf.Clamp(1.0f - nx, 0.0f, 1.0f), 1.2f) * Mathf.Pow(Mathf.Clamp(1.0f - ny * 3.5f, 0.0f, 1.0f), 2.0f);
+				var vRay = Mathf.Pow(Mathf.Clamp(1.0f - ny, 0.0f, 1.0f), 1.2f) * Mathf.Pow(Mathf.Clamp(1.0f - nx * 3.5f, 0.0f, 1.0f), 2.0f);
+
+				var alpha = Mathf.Clamp(core * 1.3f + hRay * 0.7f + vRay * 0.7f, 0.0f, 1.0f);
+				image.SetPixel(x, y, new Color(1, 1, 1, alpha));
 			}
 		}
 		return ImageTexture.CreateFromImage(image);
