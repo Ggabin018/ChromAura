@@ -35,14 +35,15 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		"pointing index",
 	)
 
-	var rotated := _rotate_pose(pointing, deg_to_rad(90.0))
-	var rotated_scores := engine.classify_pose(rotated)
-	_expect_score(
-		rotated_scores,
-		HandGestureEngine.INDEX_POINTING,
-		engine.activation_threshold,
-		"rotated pointing index",
-	)
+	for angle_degrees in [90.0, 180.0, 270.0]:
+		var rotated := _rotate_pose(pointing, deg_to_rad(angle_degrees))
+		var rotated_scores := engine.classify_pose(rotated)
+		_expect_score(
+			rotated_scores,
+			HandGestureEngine.INDEX_POINTING,
+			engine.activation_threshold,
+			"pointing index rotated by %.0f degrees" % angle_degrees,
+		)
 
 	var thumb_up := _make_pose(HandGestureEngine.THUMB_UP)
 	var thumb_scores := engine.classify_pose(thumb_up)

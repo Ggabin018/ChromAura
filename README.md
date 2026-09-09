@@ -26,6 +26,10 @@ func _on_gesture_started(detection: GestureDetection) -> void:
 direction, handedness and source timestamp. Effects should use `track_id` as
 their stable per-hand key.
 
+The drawing mode is driven exclusively by an active `INDEX_POINTING`
+detection. Its drawing anchor is the normalized index fingertip, regardless of
+the hand's orientation in the camera image.
+
 Run the deterministic gesture tests with:
 
 ```bash
