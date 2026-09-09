@@ -12,6 +12,7 @@ extends Control
 @onready var gesture_status_label: Label = $GestureStatus
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
+@onready var body_silhouette: TextureRect = $Particles/BodySilhouette
 
 var _gesture_recognizer: MediaPipeGestureRecognizer
 var _recognition_pending := false
@@ -30,6 +31,9 @@ func _ready() -> void:
 	hand_overlay.visible = show_hand_detection
 	status_label.visible = show_hand_detection
 	gesture_status_label.visible = false
+
+	if body_silhouette.material is ShaderMaterial:
+		body_silhouette.material.set_shader_parameter("threshold", depth_threshold)
 
 	if _initialize_gesture_recognizer():
 		_set_status("")
@@ -154,6 +158,8 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 func _on_depth_frame(image_texture: ImageTexture) -> void:
 	if image_texture == null:
 		return
+
+	body_silhouette.texture = image_texture
 
 	var source := image_texture.get_image()
 	if source == null or source.is_empty():
