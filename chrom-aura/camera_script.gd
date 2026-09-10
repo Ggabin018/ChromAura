@@ -15,10 +15,12 @@ extends Control
 @export_range(1.0, 30.0, 0.5) var debug_body_smoothing := 12.0
 @export_range(0.2, 1.5, 0.05) var debug_body_far_scale := 0.65
 @export_range(0.2, 1.5, 0.05) var debug_body_near_scale := 1.05
+@export var debug_body_arm_extended := true
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
 @onready var gesture_engine: HandGestureEngine = $HandGestureEngine
+@onready var hand_detection_layer: CanvasLayer = $HandDetectionLayer
 @onready var status_label: Label = $Status
 @onready var body_status_label: RichTextLabel = $BodyStatus
 @onready var gesture_status_label: Label = $GestureStatus
@@ -56,6 +58,8 @@ const DEBUG_MASK_SIZE := Vector2i(640, 480)
 var _debug_body_image: Image
 var _debug_display_offset_x := 0.0
 var _debug_display_depth := 0.78
+var _camera_mask_pixels := PackedByteArray()
+var _camera_depth_mask: Image
 func _ready() -> void:
 	_register_debug_input_actions()
 	_debug_display_offset_x = debug_body_offset_x
@@ -75,6 +79,7 @@ func _ready() -> void:
 	depth_camera.auto_reconnect = true
 
 	hand_overlay.visible = false
+	hand_detection_layer.visible = false
 	status_label.visible = false
 	if is_instance_valid(body_status_label):
 		body_status_label.visible = false
@@ -112,6 +117,7 @@ func _input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("dev-mode-toggle"):
 		dev_mode_toggled = not dev_mode_toggled
+		hand_detection_layer.visible = dev_mode_toggled
 		hand_overlay.visible = dev_mode_toggled
 		status_label.visible = dev_mode_toggled
 		if is_instance_valid(body_status_label):
@@ -122,7 +128,6 @@ func _input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("debug_toggle_body"):
 		debug_body_enabled = not debug_body_enabled
-		body_silhouette.visible = not debug_body_enabled
 		if debug_body_enabled:
 			_push_debug_body_mask()
 		else:
@@ -437,14 +442,23 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 
 	var width := source.get_width()
 	var height := source.get_height()
-	var depth_mask := Image.create(width, height, false, Image.FORMAT_RGB8)
+	if source.get_format() != Image.FORMAT_RGB8:
+		source.convert(Image.FORMAT_RGB8)
+	var source_pixels := source.get_data()
+	_camera_mask_pixels.resize(width * height * 3)
+	# Threshold once here; retain analog red depth and the existing horizontal flip.
+	# Byte access avoids hundreds of thousands of get_pixel/set_pixel calls per frame.
 	for y in range(height):
 		for x in range(width):
-			var raw_depth := source.get_pixel(x, y).r
-			if raw_depth >= depth_threshold:
-				depth_mask.set_pixel(width - 1 - x, y, Color(raw_depth, 0, 0, 1))
+			var depth := source_pixels[(y * width + x) * 3]
+			var destination := (y * width + width - 1 - x) * 3
+			_camera_mask_pixels[destination] = depth if depth / 255.0 >= depth_threshold else 0
+	if _camera_depth_mask == null:
+		_camera_depth_mask = Image.create_from_data(width, height, false, Image.FORMAT_RGB8, _camera_mask_pixels)
+	else:
+		_camera_depth_mask.set_data(width, height, false, Image.FORMAT_RGB8, _camera_mask_pixels)
 
-	particles_layer.SetDepthImageMask(depth_mask)
+	particles_layer.SetDepthImageMask(_camera_depth_mask)
 	_update_body_debug_ui()
 
 
@@ -484,7 +498,7 @@ func _update_body_debug_ui() -> void:
 
 
 func _register_debug_input_actions() -> void:
-	_add_debug_key("debug_toggle_body", KEY_D)
+	_add_debug_key("debug_toggle_body", KEY_F)
 	_add_debug_key("debug_body_depth_up", KEY_PLUS)
 	_add_debug_key("debug_body_depth_up", KEY_KP_ADD)
 	_add_debug_key("debug_body_depth_down", KEY_MINUS)
@@ -507,7 +521,6 @@ func _add_debug_key(action: StringName, keycode: Key) -> void:
 
 
 func _push_debug_body_mask() -> void:
-	body_silhouette.visible = false
 	if _debug_body_image == null:
 		_debug_body_image = Image.create(DEBUG_MASK_SIZE.x, DEBUG_MASK_SIZE.y, false, Image.FORMAT_RGB8)
 		for y in range(DEBUG_MASK_SIZE.y):
@@ -521,7 +534,8 @@ func _push_debug_body_mask() -> void:
 func _update_debug_body_transform() -> void:
 	var body_scale := lerpf(debug_body_far_scale, debug_body_near_scale, _debug_display_depth)
 	# Keep the complete silhouette inside the mask area, including at the largest zoom.
-	var horizontal_limit := maxf(0.0, DEBUG_MASK_SIZE.x * 0.5 - 130.0 * body_scale)
+	var half_width := 215.0 if debug_body_arm_extended else 130.0
+	var horizontal_limit := maxf(0.0, DEBUG_MASK_SIZE.x * 0.5 - half_width * body_scale)
 	debug_body_offset_x = clampf(debug_body_offset_x, -horizontal_limit, horizontal_limit)
 	_debug_display_offset_x = clampf(_debug_display_offset_x, -horizontal_limit, horizontal_limit)
 	particles_layer.SetDemoBodyTransform(true, _debug_display_offset_x, body_scale, _debug_display_depth)
@@ -534,6 +548,8 @@ func _is_debug_body_pixel(x: float, y: float) -> bool:
 	var head := _inside_ellipse(x, body_y, 320.0, 132.0, 48.0, 58.0)
 	var torso := _inside_ellipse(x, body_y, 320.0, 275.0, 86.0, 128.0)
 	var left_arm := _inside_ellipse(x, body_y, 225.0, 280.0, 34.0, 118.0)
+	if debug_body_arm_extended:
+		left_arm = _inside_ellipse(x, body_y, 207.0, 240.0, 100.0, 28.0)
 	var right_arm := _inside_ellipse(x, body_y, 415.0, 280.0, 34.0, 118.0)
 	var left_leg := _inside_ellipse(x, body_y, 278.0, 425.0, 42.0, 110.0)
 	var right_leg := _inside_ellipse(x, body_y, 362.0, 425.0, 42.0, 110.0)
