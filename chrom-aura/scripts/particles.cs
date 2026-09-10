@@ -29,13 +29,13 @@ public partial class particles : CanvasLayer
 
 	[ExportGroup("Débits et Limites")]
 	/// <summary>Nombre de particules de silhouette émises par seconde.</summary>
-	[Export] public int ParticlesPerSecond { get; set; } = 38000;
+	[Export] public int ParticlesPerSecond { get; set; } = 100000;
 
 	/// <summary>Capacité maximale du pool de brume pour une palette.</summary>
-	[Export] public int MaxMistParticles { get; set; } = 35000;
+	[Export] public int MaxMistParticles { get; set; } = 150000;
 
 	/// <summary>Capacité maximale du pool de scintillements pour une palette.</summary>
-	[Export] public int MaxSparkleParticles { get; set; } = 30000;
+	[Export] public int MaxSparkleParticles { get; set; } = 120000;
 
 	/// <summary>Capacité maximale du pool de tracé pour une palette.</summary>
 	[Export] public int MaxTrailParticles { get; set; } = 25000;
@@ -54,7 +54,7 @@ public partial class particles : CanvasLayer
 	[Export] public int ClusterStride { get; set; } = 4;
 
 	/// <summary>Discontinuité maximale de profondeur Z autorisée entre deux pixels d'un même corps.</summary>
-	[Export] public float MaxDepthDiscontinuity { get; set; } = 0.14f;
+	[Export] public float MaxDepthDiscontinuity { get; set; } = 0.30f;
 
 	/// <summary>Nombre minimal de pixels pour valider la détection d'un corps (filtre de bruit).</summary>
 	[Export] public int MinClusterPixels { get; set; } = 20;
@@ -119,6 +119,13 @@ public partial class particles : CanvasLayer
 	// =========================================================================
 	// CYCLE DE VIE GODOT
 	// =========================================================================
+
+	private float _NormalizeDepth(float depth)
+	{
+		var depthSpan = Mathf.Max(_bodyDetector.MaxDepth - _bodyDetector.MinDepth, 0.001f);
+
+		return Mathf.Clamp((depth - _bodyDetector.MinDepth) / depthSpan, 0.0f, 1.0f);
+	}
 
 	public override void _Ready()
 	{
@@ -307,8 +314,7 @@ public partial class particles : CanvasLayer
 		var palette = palettes[paletteIndex];
 
 		// La profondeur pilote à la fois la couleur et la proportion de scintillements.
-		var depthSpan = Mathf.Max(_bodyDetector.MaxDepth - _bodyDetector.MinDepth, 0.001f);
-		var closeness = Mathf.Clamp((sample.NormalizedDepth - _bodyDetector.MinDepth) / depthSpan, 0.0f, 1.0f);
+		var closeness = _NormalizeDepth(sample.NormalizedDepth);
 		var bodyColor = ColorFromDepth ? palette.EvaluateBody(closeness) : palette.ColorNear;
 		var sparkleChance = Mathf.Lerp(0.01f, 0.85f, Mathf.Pow(closeness, 1.8f));
 
@@ -322,6 +328,8 @@ public partial class particles : CanvasLayer
 				bodyColor.Lerp(Colors.White, _random.RandfRange(0.08f, 0.28f)),
 				0.98f
 			);
+
+			_sparkleParticleSystems[paletteIndex].ProcessMaterial.Set("color", sparkleColor);
 
 			_sparkleParticleSystems[paletteIndex].EmitParticle(
 				new Transform2D(0.0f, screenPos + RandomOffset(1.0f)),
@@ -342,6 +350,8 @@ public partial class particles : CanvasLayer
 			_random.RandfRange(-0.9f, 0.9f),
 			_random.RandfRange(-1.5f, 0.4f)
 		);
+		
+		_mistParticleSystems[paletteIndex].ProcessMaterial.Set("color", mistColor);
 
 		_mistParticleSystems[paletteIndex].EmitParticle(
 			new Transform2D(0.0f, screenPos + RandomOffset(0.8f)),
@@ -428,6 +438,8 @@ public partial class particles : CanvasLayer
 
 		var color = BoostColor(palette.EvaluateTrail(_random.Randf()), 0.96f);
 
+		_trailCoreParticleSystems[paletteIndex].ProcessMaterial.Set("color", color);
+
 		_trailCoreParticleSystems[paletteIndex].EmitParticle(
 			new Transform2D(0.0f, basePosition + offset),
 			drift,
@@ -455,6 +467,8 @@ public partial class particles : CanvasLayer
 			palette.EvaluateTrail(_random.Randf()).Lerp(Colors.White, _random.RandfRange(0.30f, 0.75f)),
 			0.98f
 		);
+
+		_trailSparkleParticleSystems[paletteIndex].ProcessMaterial.Set("color", sparkleColor);
 
 		_trailSparkleParticleSystems[paletteIndex].EmitParticle(
 			new Transform2D(_random.RandfRange(0.0f, Mathf.Tau), basePosition + offset),
@@ -533,9 +547,10 @@ public partial class particles : CanvasLayer
 		scaleCurve.AddPoint(new Vector2(1.0f, 0.25f));
 
 		var colorRamp = new Gradient();
-		colorRamp.SetColor(0, Opaque(palette.ColorFar));
-		colorRamp.AddPoint(0.45f, Opaque(palette.ColorNear));
-		colorRamp.AddPoint(1.0f, Opaque(palette.ColorFar));
+		colorRamp.SetColor(0, Colors.White);
+		colorRamp.AddPoint(0.25f, Colors.White);
+		colorRamp.AddPoint(0.75f, new Color(0.65f, 0.65f, 0.65f, 1.0f));
+		colorRamp.AddPoint(1.0f, new Color(0.15f, 0.15f, 0.15f, 1.0f));
 
 		var processMat = new ParticleProcessMaterial
 		{
@@ -559,7 +574,7 @@ public partial class particles : CanvasLayer
 			Lifetime = MistLifetime,
 			LocalCoords = false,
 			Emitting = false,
-			Texture = CreateMistTexture(14),
+			Texture = CreateMistTexture(18),
 			ProcessMaterial = processMat,
 			Material = CreateCanvasMaterial(),
 			VisibilityRect = new Rect2(-100, -100, 10000, 10000),
@@ -584,9 +599,10 @@ public partial class particles : CanvasLayer
 		scaleCurve.AddPoint(new Vector2(1.0f, 0.1f));
 
 		var colorRamp = new Gradient();
-		colorRamp.SetColor(0, Opaque(palette.ColorNear));
-		colorRamp.AddPoint(0.45f, Opaque(palette.ColorNear.Lerp(Colors.White, 0.22f)));
-		colorRamp.AddPoint(1.0f, Opaque(palette.ColorFar));
+		colorRamp.SetColor(0, Colors.White);
+		colorRamp.AddPoint(0.25f, Colors.White);
+		colorRamp.AddPoint(0.75f, new Color(0.65f, 0.65f, 0.65f, 1.0f));
+		colorRamp.AddPoint(1.0f, new Color(0.15f, 0.15f, 0.15f, 1.0f));
 
 		var processMat = new ParticleProcessMaterial
 		{
@@ -610,7 +626,7 @@ public partial class particles : CanvasLayer
 			Lifetime = SparkleLifetime,
 			LocalCoords = false,
 			Emitting = false,
-			Texture = CreateSparkleTexture(16),
+			Texture = CreateSparkleTexture(20),
 			ProcessMaterial = processMat,
 			Material = CreateCanvasMaterial(),
 			VisibilityRect = new Rect2(-100, -100, 10000, 10000),

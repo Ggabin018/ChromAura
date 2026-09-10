@@ -13,6 +13,17 @@ extends Control
 @onready var status_label: Label = $Status
 @onready var body_status_label: RichTextLabel = $BodyStatus
 @onready var gesture_status_label: Label = $GestureStatus
+
+@export_range(0.0, 1.0, 0.01)
+var depth_min_for_color := 0.65
+
+@export_range(0.0, 1.0, 0.01)
+var depth_max_for_color := 1.0
+
+@export var depth_color_min := Color8(180, 250, 255)
+@export var depth_color_max := Color8(110, 20, 220)
+
+@export var mirror_depth := true
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
@@ -22,7 +33,6 @@ var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
-
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -216,9 +226,9 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 	var depth_mask := Image.create(width, height, false, Image.FORMAT_RGB8)
 	for y in range(height):
 		for x in range(width):
-			var depth := source.get_pixel(x, y).r
-			if depth >= depth_threshold:
-				depth_mask.set_pixel(width - 1 - x, y, Color(depth, 0, 0, 1))
+			var raw_depth := source.get_pixel(x, y).r
+			if raw_depth >= depth_threshold:
+				depth_mask.set_pixel(width - 1 - x, y, Color(raw_depth, 0, 0, 1))
 
 	particles_layer.SetDepthImageMask(depth_mask)
 	_update_body_debug_ui()
