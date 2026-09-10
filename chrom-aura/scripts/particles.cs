@@ -20,16 +20,16 @@ public partial class particles : CanvasLayer
 	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
 
 	[ExportGroup("Traînée multicolore")]
-	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 0.75f;
+	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 3.25f;
 	[Export] public int OutwardParticlesPerSecond { get; set; } = 8000;
 	[Export] public int MaxOutwardParticles { get; set; } = 18000;
 	// Initial fall speed. It is depth-linked and shared by every body sample.
 	[Export] public float OutwardSpeed { get; set; } = 8.0f;
 	[Export] public float OutwardSize { get; set; } = 100.0f;
-	[Export] public float OutwardGravity { get; set; } = 300.0f;
+	[Export] public float OutwardGravity { get; set; } = 75.0f;
 	[Export(PropertyHint.Range, "0,10,0.1")] public float OutwardDamping { get; set; } = 10.0f;
 	// Optical density, not RGB amplification: zero hides smoke without whitening its colors.
-	[Export(PropertyHint.Range, "0,4,0.05,or_greater")] public float OutwardIntensity { get; set; } = 1.65f;
+	[Export(PropertyHint.Range, "0,4,0.05,or_greater")] public float OutwardIntensity { get; set; } = 1.0f;
 	// These settings also update the live material in the Remote Inspector.
 	[Export] public bool OutwardTurbulenceEnabled { get; set; } = true;
 	[Export(PropertyHint.Range, "0,1,0.01")] public float OutwardTurbulenceInfluence { get; set; } = 0.16f;
@@ -185,6 +185,9 @@ public partial class particles : CanvasLayer
 
 	private GpuParticles2D _outwardParticleSystem = null!;
 	private float _outwardEmissionRemainder;
+	private int _outwardSampleCursor;
+	private int _outwardSampleStep = 1;
+	private int _outwardSampleCount;
 	private float _meanBodyDepth;
 	private Transform2D _maskToScreen = Transform2D.Identity;
 	private Transform2D _bodyToScreen = Transform2D.Identity;
@@ -332,6 +335,8 @@ public partial class particles : CanvasLayer
 		{
 			_emissionRemainder = 0.0f;
 			_outwardEmissionRemainder = 0.0f;
+			_outwardSampleCursor = 0;
+			_outwardSampleCount = 0;
 			return;
 		}
 
@@ -1135,7 +1140,12 @@ public partial class particles : CanvasLayer
 
 	private void EmitOutwardParticle()
 	{
-		var sample = _maskPoints[_random.RandiRange(0, _maskPoints.Count - 1)];
+		// The samples are ordered top-to-bottom. A plain +1 cursor made that raster
+		// order visible as a vertical scan. A coprime step visits every sample once,
+		// but distributes consecutive emissions across the complete silhouette.
+		PrepareOutwardSampleSequence();
+		var sample = _maskPoints[_outwardSampleCursor % _maskPoints.Count];
+		_outwardSampleCursor = (_outwardSampleCursor + _outwardSampleStep) % _maskPoints.Count;
 		var closeness = GetCloseness(_demoBodyEnabled ? _demoBodyDepth : sample.NormalizedDepth);
 		if (_random.Randf() > Mathf.Lerp(0.28f, 1.0f, closeness))
 			return;
@@ -1153,6 +1163,32 @@ public partial class particles : CanvasLayer
 			outwardVelocity,
 			Colors.White, Colors.White,
 			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity));
+	}
+
+	private void PrepareOutwardSampleSequence()
+	{
+		var count = _maskPoints.Count;
+		if (_outwardSampleCount == count)
+			return;
+
+		_outwardSampleCount = count;
+		_outwardSampleCursor = _random.RandiRange(0, count - 1);
+		// A golden-ratio-sized jump disperses neighbours in a scanline list. Increment
+		// it until it is coprime with the count, guaranteeing a full permutation.
+		_outwardSampleStep = Mathf.Max(1, Mathf.FloorToInt(count * 0.61803399f));
+		while (GreatestCommonDivisor(_outwardSampleStep, count) != 1)
+			_outwardSampleStep++;
+	}
+
+	private static int GreatestCommonDivisor(int left, int right)
+	{
+		while (right != 0)
+		{
+			var remainder = left % right;
+			left = right;
+			right = remainder;
+		}
+		return left;
 	}
 
 	private float GetCloseness(float normalizedDepth)
