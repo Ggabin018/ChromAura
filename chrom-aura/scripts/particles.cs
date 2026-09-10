@@ -23,7 +23,7 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsque le mode de dessin bascule entre normal et physique.</summary>
 	[Signal] public delegate void DrawingModeChangedEventHandler(bool isPhysics);
 	[ExportGroup("Traînée multicolore")]
-	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 1.25f;
+	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 0.4f;
 	[Export] public int OutwardParticlesPerSecond { get; set; } = 8000;
 	[Export] public int MaxOutwardParticles { get; set; } = 18000;
 	// Initial fall speed. It is depth-linked and shared by every body sample.
@@ -352,9 +352,9 @@ public partial class particles : CanvasLayer
 		var intensityDepth = _releasedTrailSamples.Count > 0 ? _meanReleasedDepth
 			: (_demoBodyEnabled ? _demoBodyDepth : _meanBodyDepth);
 		var closeness = GetCloseness(intensityDepth);
-		// Keep the distant look unchanged, but compress the near-depth response so a
-		// close body cannot turn the overlapping coloured smoke into a white hotspot.
-		var depthIntensityScale = Mathf.Lerp(0.4f, 0.55f, Mathf.SmoothStep(0.0f, 1.0f, closeness));
+		// Keep the far-depth look as the baseline. Depth only has a deliberately tiny
+		// influence so moving close cannot turn overlapping rainbow smoke white.
+		var depthIntensityScale = Mathf.Lerp(0.4f, 0.45f, Mathf.SmoothStep(0.0f, 1.0f, closeness));
 		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * depthIntensityScale;
 		// Native alpha blending: intensity controls opacity only, not RGB brightness.
 		_outwardParticleSystem.SelfModulate = new Color(1.0f, 1.0f, 1.0f,
@@ -401,7 +401,7 @@ public partial class particles : CanvasLayer
 			_emissionRemainder = 0.0f;
 		}
 
-		// OutwardSmoke now drains only the zones which the body has just released.
+		// OutwardSmoke drains only the zones which the body has just released.
 		var requestedRate = Mathf.Max(0, OutwardParticlesPerSecond);
 		var safeRate = _outwardParticleSystem.Amount * 0.9f / (float)_outwardParticleSystem.Lifetime;
 		if (_releasedTrailSamples.Count == 0)
@@ -1701,7 +1701,6 @@ public partial class particles : CanvasLayer
 		// persistent particles read as a flowing multicolour trail, not an outline jet.
 		var outwardVelocity = new Vector2(_random.RandfRange(-0.18f, 0.18f), 1.0f)
 			* depthSpeed * _random.RandfRange(0.7f, 1.05f);
-
 		_outwardParticleSystem.EmitParticle(
 			new Transform2D(0.0f, screenPosition),
 			outwardVelocity,
@@ -1739,9 +1738,8 @@ public partial class particles : CanvasLayer
 		scaleCurve.AddPoint(new Vector2(0.4f, 1.05f));
 		scaleCurve.AddPoint(new Vector2(1.0f, 1.35f));
 
-		// Complete one hue cycle while the particle is actually visible.  If the cycle
-		// is spread over its full lifetime, the transparent birth/death sections hide
-		// green, cyan or violet and leave only a small red/magenta slice onscreen.
+		// One complete rainbow during the visible part of the particle lifetime.
+		// The shared ramp keeps contiguous colour bands in a trail rather than random hues.
 		var hueRamp = new Gradient();
 		const int hueSteps = 12;
 		const float visibleStart = 0.12f;
