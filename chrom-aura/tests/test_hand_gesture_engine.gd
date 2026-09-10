@@ -13,6 +13,7 @@ func _run() -> void:
 	_test_static_classification(engine)
 	_test_temporal_events(engine)
 	_test_gun_temporal_events(engine)
+	_test_thumb_down_temporal_events(engine)
 	_test_track_association(engine)
 	_test_heart_events(engine)
 	engine.free()
@@ -59,6 +60,30 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		"horizontal thumb as thumb up",
 	)
 
+	var thumb_down := _make_pose(HandGestureEngine.THUMB_DOWN)
+	var thumb_down_scores := engine.classify_pose(thumb_down)
+	_expect_score(thumb_down_scores, HandGestureEngine.THUMB_DOWN, engine.activation_threshold, "thumb down")
+	_expect_below(
+		thumb_down_scores,
+		HandGestureEngine.THUMB_UP,
+		engine.maintenance_threshold,
+		"thumb down as thumb up",
+	)
+	_expect_below(
+		thumb_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"thumb up as thumb down",
+	)
+	var horizontal_thumb_down := _rotate_pose(thumb_down, deg_to_rad(90.0))
+	var horizontal_down_scores := engine.classify_pose(horizontal_thumb_down)
+	_expect_below(
+		horizontal_down_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"horizontal thumb as thumb down",
+	)
+
 	var two_finger_pointing := _make_pose(HandGestureEngine.INDEX_MIDDLE_POINTING)
 	var two_finger_scores := engine.classify_pose(two_finger_pointing)
 	_expect_score(
@@ -86,6 +111,18 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		engine.activation_threshold,
 		"two-finger pointing with thumb up",
 	)
+	_expect_below(
+		thumb_independent_scores,
+		HandGestureEngine.THUMB_UP,
+		engine.maintenance_threshold,
+		"pointing with thumb up as thumb up",
+	)
+	_expect_below(
+		thumb_independent_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"pointing with thumb up as thumb down",
+	)
 
 	var open_palm := _make_pose(&"OPEN_PALM")
 	var open_scores := engine.classify_pose(open_palm)
@@ -107,6 +144,12 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		engine.maintenance_threshold,
 		"open palm as finger gun",
 	)
+	_expect_below(
+		open_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"open palm as thumb down",
+	)
 
 	var gun_left := _make_gun_pose(true)
 	var gun_left_scores := engine.classify_pose(gun_left)
@@ -116,6 +159,18 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		engine.activation_threshold,
 		"finger gun pointing left",
 	)
+	_expect_below(
+		gun_left_scores,
+		HandGestureEngine.THUMB_UP,
+		engine.maintenance_threshold,
+		"finger gun left as thumb up",
+	)
+	_expect_below(
+		gun_left_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"finger gun left as thumb down",
+	)
 
 	var gun_right := _make_gun_pose(false)
 	var gun_right_scores := engine.classify_pose(gun_right)
@@ -124,6 +179,18 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		HandGestureEngine.FINGER_GUN,
 		engine.activation_threshold,
 		"finger gun pointing right",
+	)
+	_expect_below(
+		gun_right_scores,
+		HandGestureEngine.THUMB_UP,
+		engine.maintenance_threshold,
+		"finger gun right as thumb up",
+	)
+	_expect_below(
+		gun_right_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"finger gun right as thumb down",
 	)
 
 	# 1-finger pointing (single index) must NOT be recognized as finger gun
@@ -284,6 +351,8 @@ func _make_pose(gesture: StringName) -> HandPose:
 
 	if gesture == HandGestureEngine.THUMB_UP:
 		_set_thumb_up(points)
+	elif gesture == HandGestureEngine.THUMB_DOWN:
+		_set_thumb_down(points)
 
 	var pose := HandPose.new()
 	pose.landmarks_3d = points
@@ -299,6 +368,13 @@ func _set_thumb_up(points: PackedVector3Array) -> void:
 	points[2] = Vector3(-0.42, 0.28, 0.0)
 	points[3] = Vector3(-0.42, 0.68, 0.0)
 	points[4] = Vector3(-0.42, 1.10, 0.0)
+
+
+func _set_thumb_down(points: PackedVector3Array) -> void:
+	points[1] = Vector3(-0.42, 0.12, 0.0)
+	points[2] = Vector3(-0.42, -0.28, 0.0)
+	points[3] = Vector3(-0.42, -0.68, 0.0)
+	points[4] = Vector3(-0.42, -1.10, 0.0)
 
 
 func _set_finger(points: PackedVector3Array, mcp_index: int, extended: bool) -> void:
@@ -530,6 +606,51 @@ func _make_finger_heart_pose() -> HandPose:
 	pose.handedness_score = 0.99
 	pose.update_geometry()
 	return pose
+
+
+func _test_thumb_down_temporal_events(engine: HandGestureEngine) -> void:
+	engine.clear()
+	var started: Array[GestureDetection] = []
+	var updated: Array[GestureDetection] = []
+	var ended: Array[GestureDetection] = []
+	engine.gesture_started.connect(func(detection: GestureDetection) -> void: started.append(detection))
+	engine.gesture_updated.connect(func(detection: GestureDetection) -> void: updated.append(detection))
+	engine.gesture_ended.connect(func(detection: GestureDetection) -> void: ended.append(detection))
+
+	var down_obs := _observation_from_pose(_make_pose(HandGestureEngine.THUMB_DOWN))
+	var observations: Array[HandObservation] = [down_obs]
+	var no_obs: Array[HandObservation] = []
+
+	engine.process_observations(observations, 0)
+	engine.process_observations(observations, 60)
+	_assert(started.is_empty(), "thumb down activated before dwell delay")
+	engine.process_observations(observations, 130)
+	_assert(started.size() == 1, "thumb down gesture_started should be emitted once")
+	if not started.is_empty():
+		_assert(started[0].gesture == HandGestureEngine.THUMB_DOWN, "wrong gesture for thumb down")
+		_assert(started[0].direction_uv.y > 0.4, "thumb down direction y should be positive")
+	engine.process_observations(observations, 160)
+	_assert(not updated.is_empty(), "gesture_updated was not emitted for thumb down")
+
+	engine.process_observations(no_obs, 200)
+	engine.process_observations(no_obs, 390)
+	_assert(ended.size() == 1, "thumb down gesture_ended should be emitted")
+
+	# Test transition: THUMB_UP to THUMB_DOWN (Gladiator Flip)
+	engine.clear()
+	started.clear()
+	ended.clear()
+	var up_obs := _observation_from_pose(_make_pose(HandGestureEngine.THUMB_UP))
+	engine.process_observations([up_obs], 0)
+	engine.process_observations([up_obs], 130)
+	_assert(started.size() == 1 and started[0].gesture == HandGestureEngine.THUMB_UP, "thumb up should activate")
+
+	# Flip to THUMB_DOWN
+	engine.process_observations([down_obs], 260)
+	engine.process_observations([down_obs], 390)
+	_assert(started.size() == 2, "thumb down should activate after flip")
+	if started.size() >= 2:
+		_assert(started[1].gesture == HandGestureEngine.THUMB_DOWN, "second activated gesture must be THUMB_DOWN")
 
 
 func _test_heart_events(engine: HandGestureEngine) -> void:

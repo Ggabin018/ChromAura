@@ -16,6 +16,9 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsqu'un tir de pistolet est effectué.</summary>
 	[Signal] public delegate void GunShotFiredEventHandler(int trackId, Vector2 screenPos, Vector2 direction);
 
+	/// <summary>Émis lorsque l'easter egg du cri de Wilhelm est déclenché.</summary>
+	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
@@ -67,7 +70,7 @@ public partial class particles : CanvasLayer
 
 	[ExportGroup("Lucioles ambiantes")]
 	/// <summary>Nombre de lucioles permanentes affichées dans le fond.</summary>
-	[Export] public int AmbientParticleCount { get; set; } = 1000;
+	[Export] public int AmbientParticleCount { get; set; } = 2000;
 
 	/// <summary>Vitesse de dérive naturelle des lucioles en pixels par seconde.</summary>
 	[Export] public float AmbientParticleSpeed { get; set; } = 12.0f;
@@ -76,7 +79,7 @@ public partial class particles : CanvasLayer
 	[Export] public float AmbientInfluenceRadius { get; set; } = 48.0f;
 
 	/// <summary>Force avec laquelle le contour de la silhouette repousse les lucioles.</summary>
-	[Export] public float AmbientRepulsionStrength { get; set; } = 110.0f;
+	[Export] public float AmbientRepulsionStrength { get; set; } = 150.0f;
 
 	/// <summary>Proportion du mouvement corporel transmise aux lucioles proches.</summary>
 	[Export(PropertyHint.Range, "0,1,0.01")]
@@ -106,7 +109,7 @@ public partial class particles : CanvasLayer
 
 	/// <summary>Opacité maximale des lucioles.</summary>
 	[Export(PropertyHint.Range, "0,1,0.01")]
-	public float AmbientParticleOpacity { get; set; } = 0.75f;
+	public float AmbientParticleOpacity { get; set; } = 0.6f;
 
 	[ExportGroup("Détection et Interaction")]
 	/// <summary>Rayon d'influence (pixels masque) autour d'un doigt pointé pour émettre des particules de tracé.</summary>
@@ -380,6 +383,16 @@ public partial class particles : CanvasLayer
 			GetPaletteIndexForTrack,
 			(tid, screenPos, dir) => EmitSignal(SignalName.GunShotFired, tid, screenPos, dir)
 		);
+	}
+
+	/// <summary>
+	/// Émet une explosion de particules pour l'easter egg du Cri de Wilhelm.
+	/// </summary>
+	public void EmitWilhelmEasterEgg(Vector2 normalizedAnchor)
+	{
+		var screenPos = NormalizedToScreen(normalizedAnchor);
+		_gunParticleManager.EmitWilhelmBurst(screenPos);
+		EmitSignal(SignalName.WilhelmEasterEggTriggered, screenPos);
 	}
 
 	private int GetPaletteIndexForTrack(int trackId)
