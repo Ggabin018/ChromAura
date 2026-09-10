@@ -20,6 +20,9 @@ const THUMB_DOWN: StringName = &"THUMB_DOWN"
 const FINGER_GUN: StringName = &"FINGER_GUN"
 const ROCK_AND_ROLL: StringName = &"ROCK_AND_ROLL"
 const FACE_PALM: StringName = &"FACE_PALM"
+const FINGER_HEART: StringName = &"FINGER_HEART"
+const TWO_HAND_HEART: StringName = &"TWO_HAND_HEART"
+const TWO_HAND_HEART_TRACK_ID := 999
 
 const WRIST := 0
 const THUMB_CMC := 1
@@ -82,6 +85,13 @@ class PoseAssignment extends RefCounted:
 var _tracks: Dictionary[int, TrackState] = {}
 var _next_track_id := 1
 
+var _two_hand_heart_active := false
+var _two_hand_heart_score := 0.0
+var _two_hand_heart_anchor := Vector2.ZERO
+var _two_hand_heart_candidate := false
+var _two_hand_heart_candidate_since_ms := -1
+var _two_hand_heart_release_since_ms := -1
+
 
 func process_observations(observations: Array[HandObservation], timestamp_ms: int) -> void:
 	var raw_poses: Array[HandPose] = []
@@ -132,6 +142,8 @@ func process_observations(observations: Array[HandObservation], timestamp_ms: in
 	for track_id in expired_track_ids:
 		_tracks.erase(track_id)
 
+	_evaluate_two_hand_heart(timestamp_ms)
+
 
 ## Returns live pose references for rendering. Consumers must treat them as read-only.
 func get_hand_poses() -> Array[HandPose]:
@@ -160,6 +172,20 @@ func get_active_detections(timestamp_ms: int = -1) -> Array[GestureDetection]:
 					event_timestamp,
 				)
 			)
+	if _two_hand_heart_active:
+		var event_timestamp := timestamp_ms if timestamp_ms >= 0 else 0
+		detections.append(
+			GestureDetection.new(
+				TWO_HAND_HEART_TRACK_ID,
+				TWO_HAND_HEART,
+				_two_hand_heart_score,
+				_two_hand_heart_anchor,
+				_two_hand_heart_anchor,
+				Vector2.UP,
+				HandPose.UNKNOWN_HAND,
+				event_timestamp,
+			)
+		)
 	return detections
 
 
@@ -340,6 +366,21 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 		pointing_score = 0.0
 		two_finger_pointing_score = 0.0
 		finger_gun_score = 0.0
+	# Finger Heart (Korean mini heart: thumb & index cross/pinch, middle/ring/pinky folded)
+	var pinch_dist := landmarks[THUMB_TIP].distance_to(landmarks[INDEX_TIP])
+	var pinch_score := 1.0 - _smoothstep(0.18, 0.55, pinch_dist)
+	var index_curl_score := 1.0 - _smoothstep(0.40, 0.78, index_extended)
+	var finger_heart_score := (
+		0.45 * pinch_score
+		+ 0.40 * non_index_folded
+		+ 0.15 * index_curl_score
+	)
+	if pinch_dist > 0.60 or non_index_folded < 0.35:
+		finger_heart_score *= 0.10
+	finger_heart_score = clampf(finger_heart_score, 0.0, 1.0)
+
+	if finger_heart_score >= 0.70:
+		pointing_score = minf(pointing_score, 0.30)
 
 	return {
 		INDEX_POINTING: clampf(pointing_score, 0.0, 1.0),
@@ -349,6 +390,7 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 		FINGER_GUN: clampf(finger_gun_score, 0.0, 1.0),
 		ROCK_AND_ROLL: clampf(rock_score, 0.0, 1.0),
 		FACE_PALM: clampf(face_palm_score, 0.0, 1.0),
+		FINGER_HEART: clampf(finger_heart_score, 0.0, 1.0),
 	}
 
 
@@ -356,6 +398,12 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 func clear() -> void:
 	_tracks.clear()
 	_next_track_id = 1
+	_two_hand_heart_active = false
+	_two_hand_heart_score = 0.0
+	_two_hand_heart_anchor = Vector2.ZERO
+	_two_hand_heart_candidate = false
+	_two_hand_heart_candidate_since_ms = -1
+	_two_hand_heart_release_since_ms = -1
 
 
 func _pose_from_observation(observation: HandObservation, timestamp_ms: int) -> HandPose:
@@ -621,6 +669,13 @@ func _make_detection(
 	elif gesture == FACE_PALM:
 		anchor = track.pose.palm_center_uv
 		direction = (track.pose.landmarks_2d[MIDDLE_TIP] - track.pose.landmarks_2d[WRIST]).normalized()
+	elif gesture == FINGER_HEART:
+		anchor = (track.pose.landmarks_2d[THUMB_TIP] + track.pose.landmarks_2d[INDEX_TIP]) * 0.5
+		var thumb_dir := (track.pose.landmarks_2d[THUMB_TIP] - track.pose.landmarks_2d[THUMB_MCP]).normalized()
+		var idx_dir := (track.pose.landmarks_2d[INDEX_TIP] - track.pose.landmarks_2d[INDEX_MCP]).normalized()
+		direction = (thumb_dir + idx_dir).normalized()
+		if direction.is_zero_approx():
+			direction = Vector2.UP
 	return GestureDetection.new(
 		track.pose.track_id,
 		gesture,
@@ -631,6 +686,131 @@ func _make_detection(
 		track.pose.handedness,
 		timestamp_ms,
 	)
+
+
+func _evaluate_two_hand_heart(timestamp_ms: int) -> void:
+	var best_score := 0.0
+	var best_anchor := Vector2.ZERO
+
+	var track_ids := _tracks.keys()
+	if track_ids.size() >= 2:
+		for i in range(track_ids.size()):
+			for j in range(i + 1, track_ids.size()):
+				var track_a: TrackState = _tracks[track_ids[i]]
+				var track_b: TrackState = _tracks[track_ids[j]]
+				if (
+					track_a.pose.landmarks_2d.size() != HandPose.LANDMARK_COUNT
+					or track_b.pose.landmarks_2d.size() != HandPose.LANDMARK_COUNT
+					or track_a.last_seen_ms != timestamp_ms
+					or track_b.last_seen_ms != timestamp_ms
+				):
+					continue
+
+				var avg_scale: float = maxf(
+					(track_a.pose.palm_scale_uv + track_b.pose.palm_scale_uv) * 0.5,
+					MIN_PALM_SCALE_UV,
+				)
+				var thumb_dist: float = track_a.pose.landmarks_2d[THUMB_TIP].distance_to(
+					track_b.pose.landmarks_2d[THUMB_TIP]
+				)
+				var index_dist: float = track_a.pose.landmarks_2d[INDEX_TIP].distance_to(
+					track_b.pose.landmarks_2d[INDEX_TIP]
+				)
+
+				var norm_thumb_dist := thumb_dist / avg_scale
+				var norm_index_dist := index_dist / avg_scale
+
+				var thumb_touch := 1.0 - _smoothstep(0.35, 1.45, norm_thumb_dist)
+				var index_touch := 1.0 - _smoothstep(0.35, 1.45, norm_index_dist)
+
+				var index_center := (
+					track_a.pose.landmarks_2d[INDEX_TIP] + track_b.pose.landmarks_2d[INDEX_TIP]
+				) * 0.5
+				var thumb_center := (
+					track_a.pose.landmarks_2d[THUMB_TIP] + track_b.pose.landmarks_2d[THUMB_TIP]
+				) * 0.5
+				# In UV space, Y goes downward. In a heart, index tips are higher (smaller Y) than thumbs.
+				var vertical_delta := (thumb_center.y - index_center.y) / avg_scale
+				var vertical_score := _smoothstep(0.10, 0.50, vertical_delta)
+
+				var palm_dist := (
+					track_a.pose.palm_center_uv.distance_to(track_b.pose.palm_center_uv) / avg_scale
+				)
+				var palm_proximity := 1.0 - _smoothstep(1.5, 4.5, palm_dist)
+
+				var pair_score := (
+					0.35 * index_touch
+					+ 0.35 * thumb_touch
+					+ 0.20 * vertical_score
+					+ 0.10 * palm_proximity
+				)
+				if norm_thumb_dist > 1.65 or norm_index_dist > 1.65 or vertical_delta < 0.04:
+					pair_score *= 0.10
+
+				if pair_score > best_score:
+					best_score = pair_score
+					best_anchor = (index_center + thumb_center) * 0.5
+
+	if not _two_hand_heart_active:
+		if best_score >= activation_threshold:
+			if not _two_hand_heart_candidate:
+				_two_hand_heart_candidate = true
+				_two_hand_heart_candidate_since_ms = timestamp_ms
+			elif timestamp_ms - _two_hand_heart_candidate_since_ms >= activation_delay_ms:
+				_two_hand_heart_active = true
+				_two_hand_heart_score = best_score
+				_two_hand_heart_anchor = best_anchor
+				_two_hand_heart_candidate = false
+				gesture_started.emit(
+					GestureDetection.new(
+						TWO_HAND_HEART_TRACK_ID,
+						TWO_HAND_HEART,
+						best_score,
+						best_anchor,
+						best_anchor,
+						Vector2.UP,
+						HandPose.UNKNOWN_HAND,
+						timestamp_ms,
+					)
+				)
+		else:
+			_two_hand_heart_candidate = false
+			_two_hand_heart_candidate_since_ms = -1
+	else:
+		_two_hand_heart_score = best_score
+		if best_score >= maintenance_threshold:
+			_two_hand_heart_anchor = best_anchor
+			_two_hand_heart_release_since_ms = -1
+			gesture_updated.emit(
+				GestureDetection.new(
+					TWO_HAND_HEART_TRACK_ID,
+					TWO_HAND_HEART,
+					best_score,
+					best_anchor,
+					best_anchor,
+					Vector2.UP,
+					HandPose.UNKNOWN_HAND,
+					timestamp_ms,
+				)
+			)
+		else:
+			if _two_hand_heart_release_since_ms < 0:
+				_two_hand_heart_release_since_ms = timestamp_ms
+			elif timestamp_ms - _two_hand_heart_release_since_ms >= release_delay_ms:
+				_two_hand_heart_active = false
+				gesture_ended.emit(
+					GestureDetection.new(
+						TWO_HAND_HEART_TRACK_ID,
+						TWO_HAND_HEART,
+						_two_hand_heart_score,
+						_two_hand_heart_anchor,
+						_two_hand_heart_anchor,
+						Vector2.UP,
+						HandPose.UNKNOWN_HAND,
+						timestamp_ms,
+					)
+				)
+				_two_hand_heart_release_since_ms = -1
 
 
 func _landmarks_in_hand_space(points: PackedVector3Array) -> PackedVector3Array:

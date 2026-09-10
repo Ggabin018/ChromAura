@@ -7,14 +7,25 @@ extends Control
 @export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.6
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
-@onready var depth_camera: DepthCameraNode = $DepthCameraNode
-@onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
-@onready var gesture_engine: HandGestureEngine = $HandGestureEngine
-@onready var status_label: Label = $Status
-@onready var body_status_label: RichTextLabel = $BodyStatus
-@onready var gesture_status_label: Label = $GestureStatus
-@onready var rgb_debug_layer: CanvasLayer = $RgbDebugLayer
-@onready var rgb_debug_view: TextureRect = $RgbDebugLayer/CameraView
+@export var debug_body_enabled := false
+@export_range(0.0, 1.0, 0.01) var debug_body_depth := 0.78
+@export_range(0.01, 0.25, 0.01) var debug_depth_step := 0.03
+@export_range(-220.0, 220.0, 1.0) var debug_body_offset_x := 0.0
+@export_range(1.0, 80.0, 1.0) var debug_body_move_step := 20.0
+@export_range(1.0, 30.0, 0.5) var debug_body_smoothing := 12.0
+@export_range(0.2, 1.5, 0.05) var debug_body_far_scale := 0.65
+@export_range(0.2, 1.5, 0.05) var debug_body_near_scale := 1.05
+@export var debug_body_arm_extended := true
+
+@onready var depth_camera: DepthCameraNode = get_node_or_null("DepthCameraNode")
+@onready var hand_overlay: HandOverlay = get_node_or_null("HandDetectionLayer/HandOverlay")
+@onready var gesture_engine: HandGestureEngine = get_node_or_null("HandGestureEngine")
+@onready var hand_detection_layer: CanvasLayer = get_node_or_null("HandDetectionLayer")
+@onready var status_label: Label = get_node_or_null("Status")
+@onready var body_status_label: RichTextLabel = get_node_or_null("BodyStatus")
+@onready var gesture_status_label: Label = get_node_or_null("GestureStatus")
+@onready var rgb_debug_layer: CanvasLayer = get_node_or_null("RgbDebugLayer")
+@onready var rgb_debug_view: TextureRect = get_node_or_null("RgbDebugLayer/CameraView")
 
 @export_range(0.0, 1.0, 0.01)
 var depth_min_for_color := 0.65
@@ -29,14 +40,16 @@ var depth_max_for_color := 1.0
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
+@onready var heart_particle_manager: Control = get_node_or_null("HeartParticleManager")
 
-var _hand_landmarker: MediaPipeHandLandmarker
+var _hand_landmarker: RefCounted = null
 var _hand_landmarker_delegate := ""
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var _rgb_debug_texture: ImageTexture
 var dev_mode_toggled := false
+var _last_heart_audio_time_ms := 0
 var _track_thumb_up_times: Dictionary[int, int] = {}
 var _last_global_thumb_up_time_ms: int = -999999
 var _last_wilhelm_easter_egg_ms: int = -999999
@@ -45,13 +58,29 @@ var _last_rock_toggle_ms: int = -999999
 var _last_face_palm_toggle_ms: int = -999999
 var rgb_debug_toggled := false
 
+const DEBUG_MASK_SIZE := Vector2i(640, 480)
+var _debug_body_image: Image
+var _debug_display_offset_x := 0.0
+var _debug_display_depth := 0.78
+var _camera_mask_pixels := PackedByteArray()
+var _camera_depth_mask: Image
 func _ready() -> void:
+	_register_debug_input_actions()
+	_debug_display_offset_x = debug_body_offset_x
+	_debug_display_depth = debug_body_depth
 	if audio_manager == null:
 		var audio_mgr_script: Script = load("res://audio_manager.gd")
 		if audio_mgr_script != null:
 			audio_manager = audio_mgr_script.new()
 			audio_manager.name = "AudioManager"
 			add_child(audio_manager)
+
+	if heart_particle_manager == null:
+		var heart_mgr_script: Script = load("res://scripts/heart_particle_manager.gd")
+		if heart_mgr_script != null:
+			heart_particle_manager = heart_mgr_script.new()
+			heart_particle_manager.name = "HeartParticleManager"
+			add_child(heart_particle_manager)
 
 	depth_camera.rgb_frame_ready.connect(_on_rgb_frame)
 	depth_camera.depth_frame_ready.connect(_on_depth_frame)
@@ -60,17 +89,23 @@ func _ready() -> void:
 	depth_camera.max_depth = 3.0
 	depth_camera.auto_reconnect = true
 
-	hand_overlay.visible = false
-	status_label.visible = false
+	if is_instance_valid(hand_overlay):
+		hand_overlay.visible = false
+	if is_instance_valid(hand_detection_layer):
+		hand_detection_layer.visible = false
+	if is_instance_valid(status_label):
+		status_label.visible = false
 	if is_instance_valid(body_status_label):
 		body_status_label.visible = false
-	gesture_status_label.visible = false
+	if is_instance_valid(gesture_status_label):
+		gesture_status_label.visible = false
 	if is_instance_valid(gesture_engine):
 		gesture_engine.activation_threshold = 0.65
 		gesture_engine.maintenance_threshold = 0.45
 		gesture_engine.activation_delay_ms = 60
 		gesture_engine.release_delay_ms = 250
-	rgb_debug_layer.visible = false
+	if is_instance_valid(rgb_debug_layer):
+		rgb_debug_layer.visible = false
 	set_process_input(true)
 
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
@@ -86,23 +121,61 @@ func _ready() -> void:
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
-	depth_camera.start_streaming()
+	if is_instance_valid(depth_camera):
+		depth_camera.start_streaming()
+	if debug_body_enabled:
+		_push_debug_body_mask()
 
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("rgb-debug-toggle"):
 		rgb_debug_toggled = not rgb_debug_toggled
-		rgb_debug_layer.visible = rgb_debug_toggled
+		if is_instance_valid(rgb_debug_layer):
+			rgb_debug_layer.visible = rgb_debug_toggled
 		get_viewport().set_input_as_handled()
 		return
 
 	if event.is_action_pressed("dev-mode-toggle"):
 		dev_mode_toggled = not dev_mode_toggled
-		hand_overlay.visible = dev_mode_toggled
-		status_label.visible = dev_mode_toggled
+		if is_instance_valid(hand_detection_layer):
+			hand_detection_layer.visible = dev_mode_toggled
+		if is_instance_valid(hand_overlay):
+			hand_overlay.visible = dev_mode_toggled
+		if is_instance_valid(status_label):
+			status_label.visible = dev_mode_toggled
 		if is_instance_valid(body_status_label):
 			body_status_label.visible = dev_mode_toggled
-		gesture_status_label.visible = dev_mode_toggled and gesture_status_label.text != ""
+		if is_instance_valid(gesture_status_label):
+			gesture_status_label.visible = dev_mode_toggled and gesture_status_label.text != ""
+
+
+func _process(delta: float) -> void:
+	if Input.is_action_just_pressed("debug_toggle_body"):
+		debug_body_enabled = not debug_body_enabled
+		if debug_body_enabled:
+			_push_debug_body_mask()
+		else:
+			particles_layer.SetDemoBodyTransform(false, 0.0, 1.0, 0.0)
+			$Particles.SetDepthImageMask(Image.create(1, 1, false, Image.FORMAT_RGB8))
+
+	if not debug_body_enabled:
+		return
+
+	# Holding a key moves continuously; taps still move by one step.
+	var movement := Input.get_axis("debug_body_move_left", "debug_body_move_right")
+	var depth_change := Input.get_axis("debug_body_depth_down", "debug_body_depth_up")
+	var movement_step := delta * 10.0
+	var depth_step := delta * 10.0
+	if Input.is_action_just_pressed("debug_body_move_left") or Input.is_action_just_pressed("debug_body_move_right"):
+		movement_step = 1.0
+	if Input.is_action_just_pressed("debug_body_depth_down") or Input.is_action_just_pressed("debug_body_depth_up"):
+		depth_step = 1.0
+	debug_body_depth = clampf(debug_body_depth + depth_change * debug_depth_step * depth_step, 0.0, 1.0)
+	debug_body_offset_x = clampf(debug_body_offset_x + movement * debug_body_move_step * movement_step, -220.0, 220.0)
+	var blend := 1.0 - exp(-debug_body_smoothing * delta)
+	_debug_display_depth = lerpf(_debug_display_depth, debug_body_depth, blend)
+	_debug_display_offset_x = lerpf(_debug_display_offset_x, debug_body_offset_x, blend)
+	_update_debug_body_transform()
 
 
 func _exit_tree() -> void:
@@ -112,18 +185,33 @@ func _exit_tree() -> void:
 
 
 func _initialize_hand_landmarker() -> bool:
+	if not ClassDB.class_exists("MediaPipeHandLandmarker"):
+		_show_error("MediaPipe GDExtension not available.")
+		return false
+
 	var model_file := FileAccess.open(model_path, FileAccess.READ)
 	if model_file == null:
 		_show_error("MediaPipe model not found: %s" % model_path)
 		return false
 	var model_buffer := model_file.get_buffer(model_file.get_length())
 
-	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_GPU):
+	var gpu_delegate: int = (
+		ClassDB.class_get_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_GPU")
+		if ClassDB.class_has_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_GPU")
+		else 1
+	)
+	var cpu_delegate: int = (
+		ClassDB.class_get_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_CPU")
+		if ClassDB.class_has_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_CPU")
+		else 0
+	)
+
+	if _try_initialize_hand_landmarker(model_buffer, gpu_delegate):
 		_hand_landmarker_delegate = "GPU"
 		return true
 
 	push_warning("MediaPipe GPU delegate unavailable; falling back to CPU.")
-	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_CPU):
+	if _try_initialize_hand_landmarker(model_buffer, cpu_delegate):
 		_hand_landmarker_delegate = "CPU fallback"
 		return true
 
@@ -133,14 +221,22 @@ func _initialize_hand_landmarker() -> bool:
 
 
 func _try_initialize_hand_landmarker(model_buffer: PackedByteArray, delegate: int) -> bool:
-	var base_options := MediaPipeTaskBaseOptions.new()
-	base_options.delegate = delegate
-	base_options.model_asset_buffer = model_buffer
+	if not ClassDB.can_instantiate("MediaPipeTaskBaseOptions") or not ClassDB.can_instantiate("MediaPipeHandLandmarker"):
+		return false
 
-	var candidate := MediaPipeHandLandmarker.new()
+	var base_options: Object = ClassDB.instantiate("MediaPipeTaskBaseOptions")
+	base_options.set("delegate", delegate)
+	base_options.set("model_asset_buffer", model_buffer)
+
+	var candidate: Object = ClassDB.instantiate("MediaPipeHandLandmarker")
+	var running_mode: int = (
+		ClassDB.class_get_integer_constant("MediaPipeVisionTask", "RUNNING_MODE_LIVE_STREAM")
+		if ClassDB.class_has_integer_constant("MediaPipeVisionTask", "RUNNING_MODE_LIVE_STREAM")
+		else 3
+	)
 	if not candidate.initialize(
 		base_options,
-		MediaPipeVisionTask.RUNNING_MODE_LIVE_STREAM,
+		running_mode,
 		max_hands,
 		hand_detection_confidence,
 		hand_presence_confidence,
@@ -169,7 +265,10 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
 	_recognition_pending = true
-	var media_pipe_image := MediaPipeImage.new()
+	var media_pipe_image: Object = ClassDB.instantiate("MediaPipeImage") if ClassDB.can_instantiate("MediaPipeImage") else null
+	if media_pipe_image == null:
+		_recognition_pending = false
+		return
 	media_pipe_image.set_image(image)
 	var timestamp_ms := maxi(Time.get_ticks_msec(), _last_timestamp_ms + 1)
 	_last_timestamp_ms = timestamp_ms
@@ -177,6 +276,8 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 
 
 func _update_rgb_debug_view(image: Image) -> void:
+	if not is_instance_valid(rgb_debug_view):
+		return
 	if (
 		_rgb_debug_texture == null
 		or _rgb_debug_texture.get_width() != image.get_width()
@@ -189,8 +290,8 @@ func _update_rgb_debug_view(image: Image) -> void:
 
 
 func _on_hand_result(
-	result: MediaPipeHandLandmarkerResult,
-	_image: MediaPipeImage,
+	result: Object,
+	_image: Object,
 	timestamp_ms: int,
 ) -> void:
 	var observations: Array[HandObservation] = []
@@ -233,6 +334,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	var detections := gesture_engine.get_active_detections(timestamp_ms)
 	var pointing_fingers: Array[Vector2] = []
 	var gun_detections: Array[Dictionary] = []
+	var heart_detections: Array[Dictionary] = []
 	for detection in detections:
 		if detection.gesture == HandGestureEngine.FINGER_GUN:
 			gun_detections.append({
@@ -267,8 +369,20 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 				})
 			else:
 				pointing_fingers.append(detection.anchor_uv)
-			_track_thumb_up_times.erase(detection.track_id)
-			_last_global_thumb_up_time_ms = -999999
+				_track_thumb_up_times.erase(detection.track_id)
+				_last_global_thumb_up_time_ms = -999999
+		elif detection.gesture == HandGestureEngine.FINGER_HEART:
+			heart_detections.append({
+				"anchor": detection.anchor_uv,
+				"gesture": detection.gesture,
+				"scale_hint": 0.8,
+			})
+		elif detection.gesture == HandGestureEngine.TWO_HAND_HEART:
+			heart_detections.append({
+				"anchor": detection.anchor_uv,
+				"gesture": detection.gesture,
+				"scale_hint": 1.35,
+			})
 		elif detection.gesture == HandGestureEngine.THUMB_UP:
 			if gun_detections.is_empty() and pointing_fingers.is_empty():
 				_track_thumb_up_times[detection.track_id] = timestamp_ms
@@ -329,7 +443,6 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 			if has_track_up or has_global_up:
 				var anchor_uv := pose.landmarks_2d[HandGestureEngine.THUMB_TIP] if pose.landmarks_2d.size() > HandGestureEngine.THUMB_TIP else pose.palm_center_uv
 				_trigger_wilhelm_easter_egg(pose.track_id, anchor_uv, timestamp_ms)
-
 	var is_pointing := not pointing_fingers.is_empty()
 
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
@@ -338,25 +451,34 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateGunState"):
 		particles_layer.UpdateGunState(gun_detections)
 
+	var is_heart := not heart_detections.is_empty()
+	if is_instance_valid(heart_particle_manager) and heart_particle_manager.has_method("update_heart_state"):
+		heart_particle_manager.update_heart_state(heart_detections)
+
+	if is_instance_valid(audio_manager) and audio_manager.has_method("set_heart_music"):
+		audio_manager.set_heart_music(is_heart)
+
 	_update_draw_instruction(is_pointing)
 
 	if is_instance_valid(audio_manager) and audio_manager.has_method("set_drawing"):
 		audio_manager.set_drawing(is_pointing)
 
 	if dev_mode_toggled:
-		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
+		if is_instance_valid(hand_overlay) and is_instance_valid(gesture_engine):
+			hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
 		var is_easter_egg_active := timestamp_ms < _wilhelm_easter_egg_active_until_ms
-		gesture_status_label.visible = not detections.is_empty() or is_easter_egg_active
-		if gesture_status_label.visible:
-			var messages: Array[String] = []
-			if is_easter_egg_active:
-				messages.append("WILHELM SCREAM!")
-			for detection in detections:
-				messages.append(
-					"#%d %s (%.0f%%)"
-					% [detection.track_id, detection.gesture, detection.score * 100.0]
-				)
-			gesture_status_label.text = "  |  ".join(messages)
+		if is_instance_valid(gesture_status_label):
+			gesture_status_label.visible = not detections.is_empty() or is_easter_egg_active
+			if gesture_status_label.visible:
+				var messages: Array[String] = []
+				if is_easter_egg_active:
+					messages.append("WILHELM SCREAM!")
+				for detection in detections:
+					messages.append(
+						"#%d %s (%.0f%%)"
+						% [detection.track_id, detection.gesture, detection.score * 100.0]
+					)
+				gesture_status_label.text = "  |  ".join(messages)
 	elif is_instance_valid(gesture_status_label):
 		gesture_status_label.visible = false
 
@@ -413,6 +535,9 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
+	if debug_body_enabled:
+		return
+
 	if image_texture == null:
 		return
 
@@ -422,14 +547,23 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 
 	var width := source.get_width()
 	var height := source.get_height()
-	var depth_mask := Image.create(width, height, false, Image.FORMAT_RGB8)
+	if source.get_format() != Image.FORMAT_RGB8:
+		source.convert(Image.FORMAT_RGB8)
+	var source_pixels := source.get_data()
+	_camera_mask_pixels.resize(width * height * 3)
+	# Threshold once here; retain analog red depth and the existing horizontal flip.
+	# Byte access avoids hundreds of thousands of get_pixel/set_pixel calls per frame.
 	for y in range(height):
 		for x in range(width):
-			var raw_depth := source.get_pixel(x, y).r
-			if raw_depth >= depth_threshold:
-				depth_mask.set_pixel(width - 1 - x, y, Color(raw_depth, 0, 0, 1))
+			var depth := source_pixels[(y * width + x) * 3]
+			var destination := (y * width + width - 1 - x) * 3
+			_camera_mask_pixels[destination] = depth if depth / 255.0 >= depth_threshold else 0
+	if _camera_depth_mask == null:
+		_camera_depth_mask = Image.create_from_data(width, height, false, Image.FORMAT_RGB8, _camera_mask_pixels)
+	else:
+		_camera_depth_mask.set_data(width, height, false, Image.FORMAT_RGB8, _camera_mask_pixels)
 
-	particles_layer.SetDepthImageMask(depth_mask)
+	particles_layer.SetDepthImageMask(_camera_depth_mask)
 	_update_body_debug_ui()
 
 
@@ -466,6 +600,69 @@ func _update_body_debug_ui() -> void:
 				)
 
 	body_status_label.text = text
+
+
+func _register_debug_input_actions() -> void:
+	_add_debug_key("debug_toggle_body", KEY_F)
+	_add_debug_key("debug_body_depth_up", KEY_PLUS)
+	_add_debug_key("debug_body_depth_up", KEY_KP_ADD)
+	_add_debug_key("debug_body_depth_down", KEY_MINUS)
+	_add_debug_key("debug_body_depth_down", KEY_KP_SUBTRACT)
+	_add_debug_key("debug_body_move_left", KEY_LEFT)
+	_add_debug_key("debug_body_move_right", KEY_RIGHT)
+
+
+func _add_debug_key(action: StringName, keycode: Key) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	else:
+		for existing_event in InputMap.action_get_events(action):
+			if existing_event is InputEventKey and existing_event.keycode == keycode:
+				return
+
+	var key_event := InputEventKey.new()
+	key_event.keycode = keycode
+	InputMap.action_add_event(action, key_event)
+
+
+func _push_debug_body_mask() -> void:
+	if _debug_body_image == null:
+		_debug_body_image = Image.create(DEBUG_MASK_SIZE.x, DEBUG_MASK_SIZE.y, false, Image.FORMAT_RGB8)
+		for y in range(DEBUG_MASK_SIZE.y):
+			for x in range(DEBUG_MASK_SIZE.x):
+				if _is_debug_body_pixel(x, y):
+					_debug_body_image.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+	$Particles.SetDepthImageMask(_debug_body_image)
+	_update_debug_body_transform()
+
+
+func _update_debug_body_transform() -> void:
+	var body_scale := lerpf(debug_body_far_scale, debug_body_near_scale, _debug_display_depth)
+	# Keep the complete silhouette inside the mask area, including at the largest zoom.
+	var half_width := 215.0 if debug_body_arm_extended else 130.0
+	var horizontal_limit := maxf(0.0, DEBUG_MASK_SIZE.x * 0.5 - half_width * body_scale)
+	debug_body_offset_x = clampf(debug_body_offset_x, -horizontal_limit, horizontal_limit)
+	_debug_display_offset_x = clampf(_debug_display_offset_x, -horizontal_limit, horizontal_limit)
+	particles_layer.SetDemoBodyTransform(true, _debug_display_offset_x, body_scale, _debug_display_depth)
+	_update_body_debug_ui()
+
+
+func _is_debug_body_pixel(x: float, y: float) -> bool:
+	# Fit the feet as well as the head in the cached mask (the previous legs were cropped).
+	var body_y := (y - 240.0) / 0.78 + 304.0
+	var head := _inside_ellipse(x, body_y, 320.0, 132.0, 48.0, 58.0)
+	var torso := _inside_ellipse(x, body_y, 320.0, 275.0, 86.0, 128.0)
+	var left_arm := _inside_ellipse(x, body_y, 225.0, 280.0, 34.0, 118.0)
+	if debug_body_arm_extended:
+		left_arm = _inside_ellipse(x, body_y, 207.0, 240.0, 100.0, 28.0)
+	var right_arm := _inside_ellipse(x, body_y, 415.0, 280.0, 34.0, 118.0)
+	var left_leg := _inside_ellipse(x, body_y, 278.0, 425.0, 42.0, 110.0)
+	var right_leg := _inside_ellipse(x, body_y, 362.0, 425.0, 42.0, 110.0)
+	return head or torso or left_arm or right_arm or left_leg or right_leg
+
+
+func _inside_ellipse(x: float, y: float, cx: float, cy: float, rx: float, ry: float) -> bool:
+	return pow((x - cx) / rx, 2.0) + pow((y - cy) / ry, 2.0) <= 1.0
 
 
 func _set_status(message: String) -> void:
