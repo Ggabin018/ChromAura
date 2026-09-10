@@ -41,6 +41,8 @@ var _track_thumb_up_times: Dictionary[int, int] = {}
 var _last_global_thumb_up_time_ms: int = -999999
 var _last_wilhelm_easter_egg_ms: int = -999999
 var _wilhelm_easter_egg_active_until_ms: int = -1
+var _last_rock_toggle_ms: int = -999999
+var _last_face_palm_toggle_ms: int = -999999
 var rgb_debug_toggled := false
 
 func _ready() -> void:
@@ -75,6 +77,8 @@ func _ready() -> void:
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("GunShotFired"):
 		particles_layer.connect("GunShotFired", _on_gun_shot_fired)
+	if is_instance_valid(particles_layer) and particles_layer.has_signal("DrawingModeChanged"):
+		particles_layer.connect("DrawingModeChanged", _on_drawing_mode_changed)
 	_update_body_debug_ui()
 
 	if _initialize_hand_landmarker():
@@ -284,6 +288,14 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 				if is_gladiator_flip:
 					_trigger_wilhelm_easter_egg(detection.track_id, detection.anchor_uv, timestamp_ms)
+		elif detection.gesture == HandGestureEngine.ROCK_AND_ROLL:
+			if (timestamp_ms - _last_rock_toggle_ms) >= 800:
+				_last_rock_toggle_ms = timestamp_ms
+				_toggle_drawing_mode()
+		elif detection.gesture == HandGestureEngine.FACE_PALM:
+			if (timestamp_ms - _last_face_palm_toggle_ms) >= 800:
+				_last_face_palm_toggle_ms = timestamp_ms
+				_trigger_face_palm_color_change(detection.anchor_uv)
 
 	# Détection réactive instantanée depuis les poses brutes (capture les flips rapides sans délai)
 	for pose in gesture_engine.get_hand_poses():
@@ -367,6 +379,25 @@ func _trigger_wilhelm_easter_egg(track_id: int, anchor_uv: Vector2, timestamp_ms
 		particles_layer.EmitWilhelmEasterEgg(anchor_uv)
 
 
+func _on_drawing_mode_changed(_is_physics: bool) -> void:
+	_update_draw_instruction(false)
+
+
+func _toggle_drawing_mode() -> void:
+	if is_instance_valid(particles_layer) and particles_layer.has_method("ToggleDrawingMode"):
+		var _is_phys: bool = particles_layer.ToggleDrawingMode()
+		_update_draw_instruction(false)
+	elif is_instance_valid(particles_layer) and particles_layer.has_method("ToggleGravity"):
+		particles_layer.ToggleGravity()
+		_update_draw_instruction(false)
+
+
+func _trigger_face_palm_color_change(anchor_uv: Vector2) -> void:
+	if is_instance_valid(particles_layer) and particles_layer.has_method("ChangeBodyColorRandomly"):
+		particles_layer.ChangeBodyColorRandomly(anchor_uv)
+		_update_body_debug_ui()
+
+
 func _update_draw_instruction(is_pointing: bool) -> void:
 	if not is_instance_valid(draw_instruction):
 		return
@@ -374,6 +405,11 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 		draw_instruction.modulate = Color(0.25, 1.0, 0.85, 1.0)
 	else:
 		draw_instruction.modulate = Color(1.0, 1.0, 1.0, 0.85)
+
+	var label_node := draw_instruction.get_node_or_null("HBoxContainer/Label") as Label
+	if is_instance_valid(label_node) and is_instance_valid(particles_layer) and "GravityEnabled" in particles_layer:
+		var is_physics: bool = bool(particles_layer.GravityEnabled)
+		label_node.text = "Dessinez (Physique)" if is_physics else "Dessinez"
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:

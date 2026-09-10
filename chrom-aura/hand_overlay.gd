@@ -117,6 +117,18 @@ func _draw_pose_diagnostics(pose: HandPose, target: Rect2) -> void:
 			anchor = index_tip
 			direction = index_direction
 		_draw_anchor(anchor, direction, target)
+	elif pose.gesture == HandGestureEngine.ROCK_AND_ROLL:
+		_draw_anchor(
+			(pose.landmarks_2d[HandGestureEngine.INDEX_TIP] + pose.landmarks_2d[HandGestureEngine.PINKY_TIP]) * 0.5,
+			pose.landmarks_2d[HandGestureEngine.INDEX_TIP] - pose.landmarks_2d[HandGestureEngine.WRIST],
+			target,
+		)
+	elif pose.gesture == HandGestureEngine.FACE_PALM:
+		_draw_anchor(
+			pose.palm_center_uv,
+			pose.landmarks_2d[HandGestureEngine.MIDDLE_TIP] - pose.landmarks_2d[HandGestureEngine.WRIST],
+			target,
+		)
 
 
 func _draw_anchor(anchor_uv: Vector2, direction_uv: Vector2, target: Rect2) -> void:

@@ -18,6 +18,8 @@ const INDEX_MIDDLE_POINTING: StringName = &"INDEX_MIDDLE_POINTING"
 const THUMB_UP: StringName = &"THUMB_UP"
 const THUMB_DOWN: StringName = &"THUMB_DOWN"
 const FINGER_GUN: StringName = &"FINGER_GUN"
+const ROCK_AND_ROLL: StringName = &"ROCK_AND_ROLL"
+const FACE_PALM: StringName = &"FACE_PALM"
 
 const WRIST := 0
 const THUMB_CMC := 1
@@ -273,12 +275,80 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	if finger_gun_score >= 0.70:
 		two_finger_pointing_score = minf(two_finger_pointing_score, finger_gun_score - 0.10)
 
+	var ring_extended := _finger_extended_score(
+		landmarks, RING_MCP, RING_PIP, RING_DIP, RING_TIP
+	)
+	var pinky_extended := _finger_extended_score(
+		landmarks, PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP
+	)
+
+	# Rock and Roll : Index et Auriculaire (pinky) tendus, Majeur et Annulaire repliés
+	var rock_horns_extension := minf(index_extended, pinky_extended)
+	var rock_inner_folded := minf(middle_folded, ring_folded)
+	var rock_score := 0.50 * rock_horns_extension + 0.50 * rock_inner_folded
+	if (
+		index_extended < 0.38
+		or pinky_extended < 0.35
+		or middle_extended > 0.35
+		or ring_extended > 0.35
+		or rock_inner_folded < 0.35
+	):
+		rock_score = 0.0
+
+	# Main à plat (Face Palm) :
+	# 1) Tous les 4 doigts principaux tendus, aucun replié, et pouce ouvert
+	var four_fingers_extension := minf(index_extended, minf(middle_extended, minf(ring_extended, pinky_extended)))
+	var any_finger_folded := maxf(index_folded, maxf(middle_folded, maxf(ring_folded, pinky_folded)))
+	var palm_shape_score := 0.20 * thumb_extended + 0.80 * four_fingers_extension
+
+	# 2) Orientation de la main vers le haut (doigts pointés vers le haut en 2D)
+	var hand_vector_2d: Vector2 = pose.landmarks_2d[MIDDLE_TIP] - pose.landmarks_2d[WRIST]
+	var up_alignment: float = hand_vector_2d.normalized().dot(Vector2.UP) if not hand_vector_2d.is_zero_approx() else 0.0
+	var up_score := _smoothstep(0.35, 0.70, up_alignment)
+
+	# 3) Paume de face par rapport à la caméra (normale de la paume orientée vers l'axe Z)
+	var camera_facing := 1.0
+	if pose.landmarks_3d.size() == HandPose.LANDMARK_COUNT:
+		var palm_u := (pose.landmarks_3d[INDEX_MCP] - pose.landmarks_3d[PINKY_MCP]).normalized()
+		var palm_v := (pose.landmarks_3d[MIDDLE_MCP] - pose.landmarks_3d[WRIST]).normalized()
+		var palm_norm := palm_u.cross(palm_v).normalized()
+		camera_facing = absf(palm_norm.z)
+	var facing_score := _smoothstep(0.40, 0.70, camera_facing)
+
+	# 4) Main immobile / stable (stabilité face au mouvement de la main)
+	var hand_speed := pose.velocity_uv.length()
+	var stability := 1.0 - _smoothstep(0.08, 0.25, hand_speed)
+
+	var face_palm_score := palm_shape_score * up_score * facing_score * stability
+	if (
+		four_fingers_extension < 0.48
+		or any_finger_folded > 0.28
+		or thumb_extended < 0.35
+		or up_alignment < 0.35
+		or camera_facing < 0.40
+		or hand_speed > 0.25
+	):
+		face_palm_score = 0.0
+
+	# Exclusions pour éviter les faux positifs
+	if four_fingers_extension >= 0.48 and any_finger_folded <= 0.28:
+		pointing_score = 0.0
+		two_finger_pointing_score = 0.0
+		finger_gun_score = 0.0
+		rock_score = 0.0
+	elif rock_score >= 0.50:
+		pointing_score = 0.0
+		two_finger_pointing_score = 0.0
+		finger_gun_score = 0.0
+
 	return {
 		INDEX_POINTING: clampf(pointing_score, 0.0, 1.0),
 		INDEX_MIDDLE_POINTING: clampf(two_finger_pointing_score, 0.0, 1.0),
 		THUMB_UP: clampf(thumb_up_score, 0.0, 1.0),
 		THUMB_DOWN: clampf(thumb_down_score, 0.0, 1.0),
 		FINGER_GUN: clampf(finger_gun_score, 0.0, 1.0),
+		ROCK_AND_ROLL: clampf(rock_score, 0.0, 1.0),
+		FACE_PALM: clampf(face_palm_score, 0.0, 1.0),
 	}
 
 
@@ -545,6 +615,12 @@ func _make_detection(
 		if direction.is_zero_approx():
 			var fallback_dir: Vector2 = index_tip - track.pose.landmarks_2d[INDEX_MCP]
 			direction = fallback_dir.normalized() if not fallback_dir.is_zero_approx() else Vector2.RIGHT
+	elif gesture == ROCK_AND_ROLL:
+		anchor = (track.pose.landmarks_2d[INDEX_TIP] + track.pose.landmarks_2d[PINKY_TIP]) * 0.5
+		direction = (track.pose.landmarks_2d[INDEX_TIP] - track.pose.landmarks_2d[WRIST]).normalized()
+	elif gesture == FACE_PALM:
+		anchor = track.pose.palm_center_uv
+		direction = (track.pose.landmarks_2d[MIDDLE_TIP] - track.pose.landmarks_2d[WRIST]).normalized()
 	return GestureDetection.new(
 		track.pose.track_id,
 		gesture,
