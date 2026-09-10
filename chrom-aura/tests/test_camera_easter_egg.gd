@@ -122,6 +122,24 @@ func _run() -> void:
 	if mock_particles.toggle_drawing_count != 2:
 		_failures.append("Rock and Roll gesture failed to toggle second time after cooldown! Count: %d" % mock_particles.toggle_drawing_count)
 
+	# The instruction carousel merge renamed HBoxContainer to Dessinez. The Rock
+	# toggle must still update the drawing-mode label in the current scene layout.
+	var instruction_panel := PanelContainer.new()
+	var drawing_row := HBoxContainer.new()
+	drawing_row.name = "Dessinez"
+	var drawing_label := Label.new()
+	drawing_label.name = "Label"
+	drawing_label.text = "Dessinez"
+	drawing_row.add_child(drawing_label)
+	instruction_panel.add_child(drawing_row)
+	cam_node.draw_instruction = instruction_panel
+	mock_particles.GravityEnabled = true
+	cam_node._update_draw_instruction(false)
+	if drawing_label.text != "Dessinez (Gravité)":
+		_failures.append("Rock drawing mode did not update the renamed Dessinez instruction label")
+	instruction_panel.free()
+	cam_node.draw_instruction = null
+
 	# Case 8: Face Palm gesture triggers body color change
 	var palm_pose := _make_pose(HandGestureEngine.FACE_PALM)
 	var palm_obs := _obs_from_pose(palm_pose)

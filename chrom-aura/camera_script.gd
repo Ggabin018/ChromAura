@@ -528,7 +528,12 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 	else:
 		draw_instruction.modulate = Color(1.0, 1.0, 1.0, 0.85)
 
-	var label_node := draw_instruction.get_node_or_null("HBoxContainer/Label") as Label
+	# The instruction carousel names the drawing row "Dessinez". Keep the old
+	# path as a fallback so this remains compatible with scenes made before the
+	# instruction-carousel merge.
+	var label_node := draw_instruction.get_node_or_null("Dessinez/Label") as Label
+	if not is_instance_valid(label_node):
+		label_node = draw_instruction.get_node_or_null("HBoxContainer/Label") as Label
 	if is_instance_valid(label_node) and is_instance_valid(particles_layer) and "GravityEnabled" in particles_layer:
 		var is_physics: bool = bool(particles_layer.GravityEnabled)
 		label_node.text = "Dessinez (Gravité)" if is_physics else "Dessinez"
