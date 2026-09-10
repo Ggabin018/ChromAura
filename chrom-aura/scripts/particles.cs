@@ -67,7 +67,7 @@ public partial class particles : CanvasLayer
 
 	[ExportGroup("Lucioles ambiantes")]
 	/// <summary>Nombre de lucioles permanentes affichées dans le fond.</summary>
-	[Export] public int AmbientParticleCount { get; set; } = 1000;
+	[Export] public int AmbientParticleCount { get; set; } = 2000;
 
 	/// <summary>Vitesse de dérive naturelle des lucioles en pixels par seconde.</summary>
 	[Export] public float AmbientParticleSpeed { get; set; } = 12.0f;
@@ -76,7 +76,7 @@ public partial class particles : CanvasLayer
 	[Export] public float AmbientInfluenceRadius { get; set; } = 48.0f;
 
 	/// <summary>Force avec laquelle le contour de la silhouette repousse les lucioles.</summary>
-	[Export] public float AmbientRepulsionStrength { get; set; } = 110.0f;
+	[Export] public float AmbientRepulsionStrength { get; set; } = 150.0f;
 
 	/// <summary>Proportion du mouvement corporel transmise aux lucioles proches.</summary>
 	[Export(PropertyHint.Range, "0,1,0.01")]
@@ -106,7 +106,7 @@ public partial class particles : CanvasLayer
 
 	/// <summary>Opacité maximale des lucioles.</summary>
 	[Export(PropertyHint.Range, "0,1,0.01")]
-	public float AmbientParticleOpacity { get; set; } = 0.75f;
+	public float AmbientParticleOpacity { get; set; } = 0.6f;
 
 	[ExportGroup("Détection et Interaction")]
 	/// <summary>Rayon d'influence (pixels masque) autour d'un doigt pointé pour émettre des particules de tracé.</summary>

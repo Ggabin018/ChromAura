@@ -46,9 +46,9 @@ const HANDEDNESS_MISMATCH_COST := 0.75
 const MIN_PALM_SCALE_UV := 0.02
 
 @export_group("Gesture Hysteresis")
-@export_range(0.0, 1.0, 0.01) var activation_threshold := 0.78
-@export_range(0.0, 1.0, 0.01) var maintenance_threshold := 0.60
-@export_range(0, 1000, 10) var activation_delay_ms := 120
+@export_range(0.0, 1.0, 0.01) var activation_threshold := 0.74
+@export_range(0.0, 1.0, 0.01) var maintenance_threshold := 0.56
+@export_range(0, 1000, 10) var activation_delay_ms := 100
 @export_range(0, 1000, 10) var release_delay_ms := 180
 @export_range(0.0, 0.5, 0.01) var switch_margin := 0.08
 
