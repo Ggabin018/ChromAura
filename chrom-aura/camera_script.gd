@@ -42,7 +42,7 @@ var depth_max_for_color := 1.0
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
 @onready var heart_particle_manager: Control = get_node_or_null("HeartParticleManager")
 
-var _hand_landmarker: MediaPipeHandLandmarker
+var _hand_landmarker: RefCounted = null
 var _hand_landmarker_delegate := ""
 var _recognition_pending := false
 var _last_timestamp_ms := 0
@@ -181,18 +181,33 @@ func _exit_tree() -> void:
 
 
 func _initialize_hand_landmarker() -> bool:
+	if not ClassDB.class_exists("MediaPipeHandLandmarker"):
+		_show_error("MediaPipe GDExtension not available.")
+		return false
+
 	var model_file := FileAccess.open(model_path, FileAccess.READ)
 	if model_file == null:
 		_show_error("MediaPipe model not found: %s" % model_path)
 		return false
 	var model_buffer := model_file.get_buffer(model_file.get_length())
 
-	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_GPU):
+	var gpu_delegate: int = (
+		ClassDB.class_get_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_GPU")
+		if ClassDB.class_has_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_GPU")
+		else 1
+	)
+	var cpu_delegate: int = (
+		ClassDB.class_get_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_CPU")
+		if ClassDB.class_has_integer_constant("MediaPipeTaskBaseOptions", "DELEGATE_CPU")
+		else 0
+	)
+
+	if _try_initialize_hand_landmarker(model_buffer, gpu_delegate):
 		_hand_landmarker_delegate = "GPU"
 		return true
 
 	push_warning("MediaPipe GPU delegate unavailable; falling back to CPU.")
-	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_CPU):
+	if _try_initialize_hand_landmarker(model_buffer, cpu_delegate):
 		_hand_landmarker_delegate = "CPU fallback"
 		return true
 
@@ -202,14 +217,22 @@ func _initialize_hand_landmarker() -> bool:
 
 
 func _try_initialize_hand_landmarker(model_buffer: PackedByteArray, delegate: int) -> bool:
-	var base_options := MediaPipeTaskBaseOptions.new()
-	base_options.delegate = delegate
-	base_options.model_asset_buffer = model_buffer
+	if not ClassDB.can_instantiate("MediaPipeTaskBaseOptions") or not ClassDB.can_instantiate("MediaPipeHandLandmarker"):
+		return false
 
-	var candidate := MediaPipeHandLandmarker.new()
+	var base_options: Object = ClassDB.instantiate("MediaPipeTaskBaseOptions")
+	base_options.set("delegate", delegate)
+	base_options.set("model_asset_buffer", model_buffer)
+
+	var candidate: Object = ClassDB.instantiate("MediaPipeHandLandmarker")
+	var running_mode: int = (
+		ClassDB.class_get_integer_constant("MediaPipeVisionTask", "RUNNING_MODE_LIVE_STREAM")
+		if ClassDB.class_has_integer_constant("MediaPipeVisionTask", "RUNNING_MODE_LIVE_STREAM")
+		else 3
+	)
 	if not candidate.initialize(
 		base_options,
-		MediaPipeVisionTask.RUNNING_MODE_LIVE_STREAM,
+		running_mode,
 		max_hands,
 		hand_detection_confidence,
 		hand_presence_confidence,
@@ -238,7 +261,10 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
 	_recognition_pending = true
-	var media_pipe_image := MediaPipeImage.new()
+	var media_pipe_image: Object = ClassDB.instantiate("MediaPipeImage") if ClassDB.can_instantiate("MediaPipeImage") else null
+	if media_pipe_image == null:
+		_recognition_pending = false
+		return
 	media_pipe_image.set_image(image)
 	var timestamp_ms := maxi(Time.get_ticks_msec(), _last_timestamp_ms + 1)
 	_last_timestamp_ms = timestamp_ms
@@ -260,8 +286,8 @@ func _update_rgb_debug_view(image: Image) -> void:
 
 
 func _on_hand_result(
-	result: MediaPipeHandLandmarkerResult,
-	_image: MediaPipeImage,
+	result: Object,
+	_image: Object,
 	timestamp_ms: int,
 ) -> void:
 	var observations: Array[HandObservation] = []
