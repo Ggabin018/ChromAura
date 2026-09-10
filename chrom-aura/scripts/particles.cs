@@ -208,6 +208,7 @@ public partial class particles : CanvasLayer
 	private CollisionShape2D? _floorShape;
 	private CollisionShape2D? _leftWallShape;
 	private CollisionShape2D? _rightWallShape;
+
 	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
 	private float _emissionRemainder;
