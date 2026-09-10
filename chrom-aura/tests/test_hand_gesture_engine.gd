@@ -14,6 +14,8 @@ func _run() -> void:
 	_test_temporal_events(engine)
 	_test_gun_temporal_events(engine)
 	_test_thumb_down_temporal_events(engine)
+	_test_rock_temporal_events(engine)
+	_test_face_palm_temporal_events(engine)
 	_test_track_association(engine)
 	_test_heart_events(engine)
 	engine.free()
@@ -149,6 +151,39 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		HandGestureEngine.THUMB_DOWN,
 		engine.maintenance_threshold,
 		"open palm as thumb down",
+	)
+	_expect_score(
+		open_scores,
+		HandGestureEngine.FACE_PALM,
+		engine.activation_threshold,
+		"open palm as face palm",
+	)
+
+	var rock_pose := _make_pose(HandGestureEngine.ROCK_AND_ROLL)
+	var rock_scores := engine.classify_pose(rock_pose)
+	_expect_score(
+		rock_scores,
+		HandGestureEngine.ROCK_AND_ROLL,
+		engine.activation_threshold,
+		"rock and roll gesture",
+	)
+	_expect_below(
+		rock_scores,
+		HandGestureEngine.INDEX_POINTING,
+		engine.maintenance_threshold,
+		"rock as pointing",
+	)
+	_expect_below(
+		rock_scores,
+		HandGestureEngine.FINGER_GUN,
+		engine.maintenance_threshold,
+		"rock as finger gun",
+	)
+	_expect_below(
+		rock_scores,
+		HandGestureEngine.FACE_PALM,
+		engine.maintenance_threshold,
+		"rock as face palm",
 	)
 
 	var gun_left := _make_gun_pose(true)
@@ -339,20 +374,39 @@ func _make_pose(gesture: StringName) -> HandPose:
 		5,
 		gesture == HandGestureEngine.INDEX_POINTING
 		or gesture == HandGestureEngine.INDEX_MIDDLE_POINTING
-		or gesture == &"OPEN_PALM",
+		or gesture == &"OPEN_PALM"
+		or gesture == HandGestureEngine.FACE_PALM
+		or gesture == HandGestureEngine.ROCK_AND_ROLL,
 	)
 	_set_finger(
 		points,
 		9,
-		gesture == HandGestureEngine.INDEX_MIDDLE_POINTING or gesture == &"OPEN_PALM",
+		gesture == HandGestureEngine.INDEX_MIDDLE_POINTING
+		or gesture == &"OPEN_PALM"
+		or gesture == HandGestureEngine.FACE_PALM,
 	)
-	_set_finger(points, 13, gesture == &"OPEN_PALM")
-	_set_finger(points, 17, gesture == &"OPEN_PALM")
+	_set_finger(
+		points,
+		13,
+		gesture == &"OPEN_PALM" or gesture == HandGestureEngine.FACE_PALM,
+	)
+	_set_finger(
+		points,
+		17,
+		gesture == &"OPEN_PALM"
+		or gesture == HandGestureEngine.FACE_PALM
+		or gesture == HandGestureEngine.ROCK_AND_ROLL,
+	)
 
 	if gesture == HandGestureEngine.THUMB_UP:
 		_set_thumb_up(points)
 	elif gesture == HandGestureEngine.THUMB_DOWN:
 		_set_thumb_down(points)
+	elif gesture == &"OPEN_PALM" or gesture == HandGestureEngine.FACE_PALM:
+		points[1] = Vector3(-0.35, -0.15, 0.0)
+		points[2] = Vector3(-0.62, 0.10, 0.0)
+		points[3] = Vector3(-0.75, 0.35, 0.0)
+		points[4] = Vector3(-0.85, 0.60, 0.0)
 
 	var pose := HandPose.new()
 	pose.landmarks_3d = points
@@ -653,6 +707,52 @@ func _test_thumb_down_temporal_events(engine: HandGestureEngine) -> void:
 		_assert(started[1].gesture == HandGestureEngine.THUMB_DOWN, "second activated gesture must be THUMB_DOWN")
 
 
+func _test_rock_temporal_events(engine: HandGestureEngine) -> void:
+	engine.clear()
+	var started: Array[GestureDetection] = []
+	var ended: Array[GestureDetection] = []
+	engine.gesture_started.connect(func(detection: GestureDetection) -> void: started.append(detection))
+	engine.gesture_ended.connect(func(detection: GestureDetection) -> void: ended.append(detection))
+
+	var rock_obs := _observation_from_pose(_make_pose(HandGestureEngine.ROCK_AND_ROLL))
+	var observations: Array[HandObservation] = [rock_obs]
+	var no_obs: Array[HandObservation] = []
+
+	engine.process_observations(observations, 0)
+	engine.process_observations(observations, 60)
+	_assert(started.is_empty(), "rock activated before dwell delay")
+	engine.process_observations(observations, 130)
+	_assert(started.size() == 1, "rock gesture_started should be emitted once")
+	if not started.is_empty():
+		_assert(started[0].gesture == HandGestureEngine.ROCK_AND_ROLL, "wrong gesture for rock and roll")
+
+	engine.process_observations(no_obs, 200)
+	engine.process_observations(no_obs, 390)
+	_assert(ended.size() == 1, "rock gesture_ended should be emitted")
+
+
+func _test_face_palm_temporal_events(engine: HandGestureEngine) -> void:
+	engine.clear()
+	var started: Array[GestureDetection] = []
+	var ended: Array[GestureDetection] = []
+	engine.gesture_started.connect(func(detection: GestureDetection) -> void: started.append(detection))
+	engine.gesture_ended.connect(func(detection: GestureDetection) -> void: ended.append(detection))
+
+	var palm_obs := _observation_from_pose(_make_pose(HandGestureEngine.FACE_PALM))
+	var observations: Array[HandObservation] = [palm_obs]
+	var no_obs: Array[HandObservation] = []
+
+	engine.process_observations(observations, 0)
+	engine.process_observations(observations, 60)
+	_assert(started.is_empty(), "face palm activated before dwell delay")
+	engine.process_observations(observations, 130)
+	_assert(started.size() == 1, "face palm gesture_started should be emitted once")
+	if not started.is_empty():
+		_assert(started[0].gesture == HandGestureEngine.FACE_PALM, "wrong gesture for face palm")
+
+	engine.process_observations(no_obs, 200)
+	engine.process_observations(no_obs, 390)
+	_assert(ended.size() == 1, "face palm gesture_ended should be emitted")
 func _test_heart_events(engine: HandGestureEngine) -> void:
 	# Test 1: Single hand FINGER_HEART temporal events
 	engine.clear()

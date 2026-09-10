@@ -97,8 +97,56 @@ func _run() -> void:
 	if mock_audio.wilhelm_play_count != 2:
 		_failures.append("Wilhelm scream failed to trigger on immediate second sequence! Count: %d" % mock_audio.wilhelm_play_count)
 
+	# Case 7: Rock and Roll gesture toggles drawing mode
+	var mock_particles := MockParticles.new()
+	cam_node.particles_layer = mock_particles
+	gesture_engine.clear()
+
+	var rock_pose := _make_pose(HandGestureEngine.ROCK_AND_ROLL)
+	var rock_obs := _obs_from_pose(rock_pose)
+	var rock_arr: Array[HandObservation] = [rock_obs]
+
+	cam_node._apply_hand_result(rock_arr, 7000)
+	cam_node._apply_hand_result(rock_arr, 7150)
+	if mock_particles.toggle_drawing_count != 1:
+		_failures.append("Rock and Roll gesture failed to toggle drawing mode! Count: %d" % mock_particles.toggle_drawing_count)
+
+	# Should respect cooldown within 800ms
+	cam_node._apply_hand_result(rock_arr, 7300)
+	if mock_particles.toggle_drawing_count != 1:
+		_failures.append("Rock and Roll gesture toggled without cooldown! Count: %d" % mock_particles.toggle_drawing_count)
+
+	# After cooldown, should toggle again
+	for t in [7500, 7700, 7900, 8100]:
+		cam_node._apply_hand_result(rock_arr, t)
+	if mock_particles.toggle_drawing_count != 2:
+		_failures.append("Rock and Roll gesture failed to toggle second time after cooldown! Count: %d" % mock_particles.toggle_drawing_count)
+
+	# Case 8: Face Palm gesture triggers body color change
+	var palm_pose := _make_pose(HandGestureEngine.FACE_PALM)
+	var palm_obs := _obs_from_pose(palm_pose)
+	var palm_arr: Array[HandObservation] = [palm_obs]
+	gesture_engine.clear()
+
+	cam_node._apply_hand_result(palm_arr, 9000)
+	cam_node._apply_hand_result(palm_arr, 9150)
+	if mock_particles.color_change_count != 1:
+		_failures.append("Face Palm gesture failed to trigger color change! Count: %d" % mock_particles.color_change_count)
+
+	# Should respect cooldown
+	cam_node._apply_hand_result(palm_arr, 9300)
+	if mock_particles.color_change_count != 1:
+		_failures.append("Face Palm gesture triggered color change within cooldown! Count: %d" % mock_particles.color_change_count)
+
+	# After cooldown, should trigger again
+	for t in [9500, 9700, 9900, 10000]:
+		cam_node._apply_hand_result(palm_arr, t)
+	if mock_particles.color_change_count != 2:
+		_failures.append("Face Palm gesture failed to trigger second color change after cooldown! Count: %d" % mock_particles.color_change_count)
+
 	gesture_engine.free()
 	mock_audio.free()
+	mock_particles.free()
 	cam_node.free()
 
 	if _failures.is_empty():
@@ -169,9 +217,19 @@ func _make_pose(gesture: StringName) -> HandPose:
 		var x_positions := {5: -0.38, 9: -0.12, 13: 0.16, 17: 0.42}
 		var x: float = x_positions[mcp]
 		points[mcp] = Vector3(x, 0.0, 0.0)
-		points[mcp + 1] = Vector3(x, 0.45, 0.0)
-		points[mcp + 2] = Vector3(x + 0.25, 0.20, 0.04)
-		points[mcp + 3] = Vector3(x + 0.10, 0.02, 0.03)
+		var is_ext := false
+		if gesture == HandGestureEngine.ROCK_AND_ROLL:
+			is_ext = (mcp == 5 or mcp == 17)
+		elif gesture == HandGestureEngine.FACE_PALM:
+			is_ext = true
+		if is_ext:
+			points[mcp + 1] = Vector3(x, 0.48, 0.0)
+			points[mcp + 2] = Vector3(x, 0.92, 0.0)
+			points[mcp + 3] = Vector3(x, 1.35, 0.0)
+		else:
+			points[mcp + 1] = Vector3(x, 0.45, 0.0)
+			points[mcp + 2] = Vector3(x + 0.25, 0.20, 0.04)
+			points[mcp + 3] = Vector3(x + 0.10, 0.02, 0.03)
 
 	if gesture == HandGestureEngine.THUMB_UP:
 		points[1] = Vector3(-0.42, -0.12, 0.0)
@@ -183,6 +241,11 @@ func _make_pose(gesture: StringName) -> HandPose:
 		points[2] = Vector3(-0.42, -0.28, 0.0)
 		points[3] = Vector3(-0.42, -0.68, 0.0)
 		points[4] = Vector3(-0.42, -1.10, 0.0)
+	elif gesture == HandGestureEngine.FACE_PALM:
+		points[1] = Vector3(-0.35, -0.15, 0.0)
+		points[2] = Vector3(-0.62, 0.10, 0.0)
+		points[3] = Vector3(-0.75, 0.35, 0.0)
+		points[4] = Vector3(-0.85, 0.60, 0.0)
 
 	var pose := HandPose.new()
 	pose.landmarks_3d = points
@@ -214,3 +277,20 @@ class MockAudio:
 	var wilhelm_play_count: int = 0
 	func play_wilhelm_scream() -> void:
 		wilhelm_play_count += 1
+
+
+class MockParticles:
+	extends Node
+	var toggle_drawing_count: int = 0
+	var color_change_count: int = 0
+	var last_anchor: Vector2 = Vector2.ZERO
+	var GravityEnabled: bool = false
+
+	func ToggleDrawingMode() -> bool:
+		toggle_drawing_count += 1
+		GravityEnabled = not GravityEnabled
+		return GravityEnabled
+
+	func ChangeBodyColorRandomly(anchor: Vector2 = Vector2.ZERO) -> void:
+		color_change_count += 1
+		last_anchor = anchor
