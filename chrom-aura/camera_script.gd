@@ -603,6 +603,7 @@ func _update_body_debug_ui() -> void:
 
 
 func _register_debug_input_actions() -> void:
+	_add_debug_key("rgb-debug-toggle", KEY_R)
 	_add_debug_key("debug_toggle_body", KEY_F)
 	_add_debug_key("debug_body_depth_up", KEY_PLUS)
 	_add_debug_key("debug_body_depth_up", KEY_KP_ADD)
@@ -617,7 +618,13 @@ func _add_debug_key(action: StringName, keycode: Key) -> void:
 		InputMap.add_action(action)
 	else:
 		for existing_event in InputMap.action_get_events(action):
-			if existing_event is InputEventKey and existing_event.keycode == keycode:
+			if (
+				existing_event is InputEventKey
+				and (
+					existing_event.keycode == keycode
+					or existing_event.physical_keycode == keycode
+				)
+			):
 				return
 
 	var key_event := InputEventKey.new()
