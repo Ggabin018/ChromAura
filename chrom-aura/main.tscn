@@ -48,7 +48,7 @@ script = ExtResource("1_camera")
 
 [node name="DepthCameraNode" type="DepthCameraNode" parent="Control" unique_id=2105442221]
 auto_start = true
-device_id = "Kinect v1 (Xbox 360):kinectv1:A00364A11113032A"
+device_id = "Simulation Device:simulation:0"
 preferred_backend = "kinectv1"
 
 [node name="Background" type="ColorRect" parent="Control" unique_id=432636189]
@@ -62,8 +62,11 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0, 0, 0, 1)
 
-[node name="Particles" type="CanvasLayer" parent="Control" unique_id=850011294]
+[node name="Particles" type="CanvasLayer" parent="Control" unique_id=695156268]
 script = ExtResource("2_particles")
+ParticlesPerSecond = 100000
+MaxMistParticles = 150000
+MaxSparkleParticles = 120000
 
 [node name="HandGestureEngine" type="Node" parent="Control" unique_id=1427992933]
 script = ExtResource("7_gesture_engine")
@@ -171,5 +174,5 @@ texture = ExtResource("4_icon")
 expand_mode = 1
 stretch_mode = 5
 
-[node name="AudioManager" type="Node" parent="Control" unique_id=938954992]
+[node name="AudioManager" type="Node" parent="Control" unique_id=2007512884]
 script = ExtResource("5_audio")
