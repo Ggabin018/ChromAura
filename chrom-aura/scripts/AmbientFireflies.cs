@@ -166,6 +166,10 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		{
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			UseColors = true,
+			Mesh = new QuadMesh
+			{
+				Size = new Vector2(GlowTextureSize, GlowTextureSize),
+			},
 			InstanceCount = count,
 		};
 		Multimesh = multiMesh;
