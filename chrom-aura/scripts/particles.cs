@@ -20,7 +20,7 @@ public partial class particles : CanvasLayer
 	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
 
 	[ExportGroup("Traînée multicolore")]
-	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 3.25f;
+	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 1.25f;
 	[Export] public int OutwardParticlesPerSecond { get; set; } = 8000;
 	[Export] public int MaxOutwardParticles { get; set; } = 18000;
 	// Initial fall speed. It is depth-linked and shared by every body sample.
@@ -179,16 +179,31 @@ public partial class particles : CanvasLayer
 	/// <summary>Accès en lecture seule à la liste des corps suivis.</summary>
 	public IReadOnlyList<TrackedBody> TrackedBodies => _bodyDetector.TrackedBodies;
 
+	/// <summary>Nombre de zones libérées en attente d'émission (test/debug).</summary>
+	public int PendingReleasedTrailCount => _releasedTrailSamples.Count;
+
 	// =========================================================================
 	// ÉTAT INTERNE
 	// =========================================================================
 
 	private GpuParticles2D _outwardParticleSystem = null!;
 	private float _outwardEmissionRemainder;
-	private int _outwardSampleCursor;
-	private int _outwardSampleStep = 1;
-	private int _outwardSampleCount;
 	private float _meanBodyDepth;
+	private float _meanReleasedDepth;
+	private readonly Queue<ReleasedMaskSample> _releasedTrailSamples = new();
+	private readonly List<ReleasedMaskSample> _releasedTrailBatch = new();
+	private bool[] _previousMaskActive = Array.Empty<bool>();
+	private bool[] _confirmedMaskActive = Array.Empty<bool>();
+	private float[] _previousMaskDepth = Array.Empty<float>();
+	private int _releaseGridWidth;
+	private int _releaseGridHeight;
+	private int _releaseGridStride;
+	private bool[] _previousDemoActive = Array.Empty<bool>();
+	private bool[] _confirmedDemoActive = Array.Empty<bool>();
+	private float[] _previousDemoDepth = Array.Empty<float>();
+	private bool[] _currentDemoActive = Array.Empty<bool>();
+	private float[] _currentDemoDepth = Array.Empty<float>();
+	private Vector2I _demoReleaseGridSize;
 	private Transform2D _maskToScreen = Transform2D.Identity;
 	private Transform2D _bodyToScreen = Transform2D.Identity;
 	private OutwardSettings? _appliedOutwardSettings;
@@ -301,8 +316,10 @@ public partial class particles : CanvasLayer
 	{
 		ApplyOutwardSettings();
 		UpdateMaskMapping();
-		// One global intensity based on the body's average depth (or the demo depth).
-		var closeness = GetCloseness(_demoBodyEnabled ? _demoBodyDepth : _meanBodyDepth);
+		// A released region keeps its last depth while it drains from the queue.
+		var intensityDepth = _releasedTrailSamples.Count > 0 ? _meanReleasedDepth
+			: (_demoBodyEnabled ? _demoBodyDepth : _meanBodyDepth);
+		var closeness = GetCloseness(intensityDepth);
 		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * Mathf.Lerp(0.4f, 1.0f, closeness);
 		// Native alpha blending: intensity controls opacity only, not RGB brightness.
 		_outwardParticleSystem.SelfModulate = new Color(1.0f, 1.0f, 1.0f,
@@ -331,36 +348,34 @@ public partial class particles : CanvasLayer
 		);
 
 		// 2. Émission des particules de silhouette corporelle
-		if (_maskPoints.Count == 0)
-		{
-			_emissionRemainder = 0.0f;
-			_outwardEmissionRemainder = 0.0f;
-			_outwardSampleCursor = 0;
-			_outwardSampleCount = 0;
-			return;
-		}
-
 		// Do not catch up an entire stalled frame with a burst of particles.
 		var emissionDelta = (float)Math.Clamp(delta, 0.0, 0.1);
-		_emissionRemainder += Mathf.Max(0, ParticlesPerSecond) * emissionDelta;
-		var particleCount = Mathf.FloorToInt(_emissionRemainder);
-		_emissionRemainder -= particleCount;
-
-		for (var i = 0; i < particleCount; i++)
+		if (_maskPoints.Count > 0)
 		{
-			EmitSampledParticle(isPointingActive);
+			_emissionRemainder += Mathf.Max(0, ParticlesPerSecond) * emissionDelta;
+			var particleCount = Mathf.FloorToInt(_emissionRemainder);
+			_emissionRemainder -= particleCount;
+
+			for (var i = 0; i < particleCount; i++)
+				EmitSampledParticle(isPointingActive);
+		}
+		else
+		{
+			_emissionRemainder = 0.0f;
 		}
 
-		// The coloured trail is sourced across the entire silhouette, rather than its
-		// edge.  Its rate still adapts to body coverage without exploding for a large mask.
-		var coverage = Mathf.Clamp(Mathf.Sqrt(_maskPoints.Count / 5000.0f), 0.5f, 1.5f)
-			* Mathf.Pow(80.0f / Mathf.Max(16.0f, OutwardSize), 2.0f);
-		var requestedRate = Mathf.Max(0, OutwardParticlesPerSecond) * coverage;
+		// OutwardSmoke now drains only the zones which the body has just released.
+		var requestedRate = Mathf.Max(0, OutwardParticlesPerSecond);
 		var safeRate = _outwardParticleSystem.Amount * 0.9f / (float)_outwardParticleSystem.Lifetime;
+		if (_releasedTrailSamples.Count == 0)
+		{
+			_outwardEmissionRemainder = 0.0f;
+			return;
+		}
 		_outwardEmissionRemainder += Mathf.Min(requestedRate, safeRate) * emissionDelta;
 		var outwardParticleCount = Mathf.FloorToInt(_outwardEmissionRemainder);
 		_outwardEmissionRemainder -= outwardParticleCount;
-		for (var i = 0; i < outwardParticleCount; i++)
+		for (var i = 0; i < outwardParticleCount && _releasedTrailSamples.Count > 0; i++)
 			EmitOutwardParticle();
 	}
 
@@ -503,6 +518,9 @@ public partial class particles : CanvasLayer
 			_maskSize
 		);
 		UpdateOutwardDepth();
+		UpdateReleasedMaskZones(depthImage);
+		if (_demoBodyEnabled)
+			UpdateReleasedDemoZones();
 
 		// Signal si le nombre de corps a évolué
 		var currentCount = _bodyDetector.DetectedBodyCount;
@@ -1123,6 +1141,171 @@ public partial class particles : CanvasLayer
 		_meanBodyDepth = depthSum / _maskPoints.Count;
 	}
 
+	private void UpdateReleasedMaskZones(Image depthImage)
+	{
+		var stride = Mathf.Max(1, ClusterStride);
+		var width = depthImage.GetWidth();
+		var height = depthImage.GetHeight();
+		var gridWidth = (width + stride - 1) / stride;
+		var gridHeight = (height + stride - 1) / stride;
+		EnsureMaskReleaseGrid(gridWidth, gridHeight, stride);
+
+		Image? converted = null;
+		if (depthImage.GetFormat() != Image.Format.Rgb8)
+		{
+			converted = (Image)depthImage.Duplicate();
+			converted.Convert(Image.Format.Rgb8);
+		}
+		using (converted)
+		{
+			var pixels = (converted ?? depthImage).GetData();
+			var hasActiveCell = false;
+			_releasedTrailBatch.Clear();
+			for (var gridY = 0; gridY < gridHeight; gridY++)
+			{
+				var y = Mathf.Min(gridY * stride, height - 1);
+				for (var gridX = 0; gridX < gridWidth; gridX++)
+				{
+					var x = Mathf.Min(gridX * stride, width - 1);
+					var index = gridY * gridWidth + gridX;
+					var depth = pixels[(y * width + x) * 3] / 255.0f;
+					var active = depth > 0.0f;
+					if (_confirmedMaskActive[index] && !active)
+					{
+						_releasedTrailBatch.Add(new ReleasedMaskSample(
+							new Vector2(x + stride * 0.5f, y + stride * 0.5f), _previousMaskDepth[index], false));
+					}
+
+					_confirmedMaskActive[index] = active && _previousMaskActive[index];
+					_previousMaskActive[index] = active;
+					_previousMaskDepth[index] = active ? depth : 0.0f;
+					hasActiveCell |= active;
+				}
+			}
+			QueueReleasedTrailBatch();
+			if (!hasActiveCell)
+				ResetMaskReleaseHistory();
+		}
+	}
+
+	private void EnsureMaskReleaseGrid(int width, int height, int stride)
+	{
+		if (_releaseGridWidth == width && _releaseGridHeight == height && _releaseGridStride == stride)
+			return;
+
+		_releaseGridWidth = width;
+		_releaseGridHeight = height;
+		_releaseGridStride = stride;
+		var count = width * height;
+		_previousMaskActive = new bool[count];
+		_confirmedMaskActive = new bool[count];
+		_previousMaskDepth = new float[count];
+	}
+
+	private void ResetMaskReleaseHistory()
+	{
+		Array.Clear(_previousMaskActive, 0, _previousMaskActive.Length);
+		Array.Clear(_confirmedMaskActive, 0, _confirmedMaskActive.Length);
+		Array.Clear(_previousMaskDepth, 0, _previousMaskDepth.Length);
+	}
+
+	private void UpdateReleasedDemoZones()
+	{
+		if (_maskPoints.Count == 0)
+		{
+			ResetDemoReleaseHistory();
+			return;
+		}
+
+		var viewport = GetViewport().GetVisibleRect().Size;
+		if (viewport.X <= 1.0f || viewport.Y <= 1.0f)
+			viewport = new Vector2(1920.0f, 1080.0f);
+		var cellSize = Mathf.Max(4, ClusterStride * 2);
+		var gridSize = new Vector2I(
+			Mathf.CeilToInt(viewport.X / cellSize),
+			Mathf.CeilToInt(viewport.Y / cellSize));
+		EnsureDemoReleaseGrid(gridSize);
+		Array.Clear(_currentDemoActive, 0, _currentDemoActive.Length);
+		Array.Clear(_currentDemoDepth, 0, _currentDemoDepth.Length);
+
+		foreach (var sample in _maskPoints)
+		{
+			var screenPosition = BodyMaskToScreen(sample.Position);
+			var gridX = Mathf.FloorToInt(screenPosition.X / cellSize);
+			var gridY = Mathf.FloorToInt(screenPosition.Y / cellSize);
+			if (gridX < 0 || gridY < 0 || gridX >= gridSize.X || gridY >= gridSize.Y)
+				continue;
+			var index = gridY * gridSize.X + gridX;
+			_currentDemoActive[index] = true;
+			_currentDemoDepth[index] = Mathf.Max(_currentDemoDepth[index], sample.NormalizedDepth);
+		}
+
+		_releasedTrailBatch.Clear();
+		for (var index = 0; index < _currentDemoActive.Length; index++)
+		{
+			if (_confirmedDemoActive[index] && !_currentDemoActive[index])
+			{
+				var gridX = index % gridSize.X;
+				var gridY = index / gridSize.X;
+				_releasedTrailBatch.Add(new ReleasedMaskSample(
+					new Vector2((gridX + 0.5f) * cellSize, (gridY + 0.5f) * cellSize), _previousDemoDepth[index], true));
+			}
+			_confirmedDemoActive[index] = _currentDemoActive[index] && _previousDemoActive[index];
+			_previousDemoActive[index] = _currentDemoActive[index];
+			_previousDemoDepth[index] = _currentDemoActive[index] ? _currentDemoDepth[index] : 0.0f;
+		}
+		QueueReleasedTrailBatch();
+	}
+
+	private void EnsureDemoReleaseGrid(Vector2I size)
+	{
+		if (_demoReleaseGridSize == size)
+			return;
+
+		_demoReleaseGridSize = size;
+		var count = size.X * size.Y;
+		_previousDemoActive = new bool[count];
+		_confirmedDemoActive = new bool[count];
+		_previousDemoDepth = new float[count];
+		_currentDemoActive = new bool[count];
+		_currentDemoDepth = new float[count];
+	}
+
+	private void ResetDemoReleaseHistory()
+	{
+		Array.Clear(_previousDemoActive, 0, _previousDemoActive.Length);
+		Array.Clear(_confirmedDemoActive, 0, _confirmedDemoActive.Length);
+		Array.Clear(_previousDemoDepth, 0, _previousDemoDepth.Length);
+		Array.Clear(_currentDemoActive, 0, _currentDemoActive.Length);
+		Array.Clear(_currentDemoDepth, 0, _currentDemoDepth.Length);
+	}
+
+	private void QueueReleasedTrailBatch()
+	{
+		if (_releasedTrailBatch.Count == 0)
+			return;
+
+		// Shuffle one released frame before queueing it: a body edge is stored in
+		// raster order, but must never appear as a scan in the particle trail.
+		for (var i = _releasedTrailBatch.Count - 1; i > 0; i--)
+		{
+			var swapIndex = _random.RandiRange(0, i);
+			(_releasedTrailBatch[i], _releasedTrailBatch[swapIndex]) =
+				(_releasedTrailBatch[swapIndex], _releasedTrailBatch[i]);
+		}
+
+		var depthSum = 0.0f;
+		var capacity = Mathf.Max(1, MaxOutwardParticles);
+		foreach (var sample in _releasedTrailBatch)
+		{
+			while (_releasedTrailSamples.Count >= capacity)
+				_releasedTrailSamples.Dequeue();
+			_releasedTrailSamples.Enqueue(sample);
+			depthSum += sample.NormalizedDepth;
+		}
+		_meanReleasedDepth = depthSum / _releasedTrailBatch.Count;
+	}
+
 	public void SetDemoBodyTransform(bool enabled, float offsetX, float scale, float depth)
 	{
 		if (_demoBodyEnabled && !enabled)
@@ -1133,24 +1316,26 @@ public partial class particles : CanvasLayer
 		_demoBodyDepth = Mathf.Clamp(depth, 0.0f, 1.0f);
 		UpdateMaskMapping();
 		if (enabled)
+		{
 			foreach (var body in _bodyDetector.TrackedBodies)
 				body.AvgDepth = _demoBodyDepth;
+			UpdateReleasedDemoZones();
+		}
+		else
+		{
+			ResetDemoReleaseHistory();
+		}
 		if (ShowBodyDebug) _debugOverlay.QueueRedraw();
 	}
 
 	private void EmitOutwardParticle()
 	{
-		// The samples are ordered top-to-bottom. A plain +1 cursor made that raster
-		// order visible as a vertical scan. A coprime step visits every sample once,
-		// but distributes consecutive emissions across the complete silhouette.
-		PrepareOutwardSampleSequence();
-		var sample = _maskPoints[_outwardSampleCursor % _maskPoints.Count];
-		_outwardSampleCursor = (_outwardSampleCursor + _outwardSampleStep) % _maskPoints.Count;
-		var closeness = GetCloseness(_demoBodyEnabled ? _demoBodyDepth : sample.NormalizedDepth);
+		var sample = _releasedTrailSamples.Dequeue();
+		var closeness = GetCloseness(sample.NormalizedDepth);
 		if (_random.Randf() > Mathf.Lerp(0.28f, 1.0f, closeness))
 			return;
 
-		var screenPosition = BodyMaskToScreen(sample.Position);
+		var screenPosition = sample.IsScreenPosition ? sample.Position : BodyMaskToScreen(sample.Position);
 		// Share the density's depth thresholds: 40% fall speed far away, full speed up close.
 		var depthSpeed = Mathf.Max(0.0f, OutwardSpeed) * Mathf.Lerp(0.4f, 1.0f, closeness);
 		// The source is the full body. A small variation plus turbulence makes the
@@ -1163,32 +1348,6 @@ public partial class particles : CanvasLayer
 			outwardVelocity,
 			Colors.White, Colors.White,
 			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity));
-	}
-
-	private void PrepareOutwardSampleSequence()
-	{
-		var count = _maskPoints.Count;
-		if (_outwardSampleCount == count)
-			return;
-
-		_outwardSampleCount = count;
-		_outwardSampleCursor = _random.RandiRange(0, count - 1);
-		// A golden-ratio-sized jump disperses neighbours in a scanline list. Increment
-		// it until it is coprime with the count, guaranteeing a full permutation.
-		_outwardSampleStep = Mathf.Max(1, Mathf.FloorToInt(count * 0.61803399f));
-		while (GreatestCommonDivisor(_outwardSampleStep, count) != 1)
-			_outwardSampleStep++;
-	}
-
-	private static int GreatestCommonDivisor(int left, int right)
-	{
-		while (right != 0)
-		{
-			var remainder = left % right;
-			left = right;
-			right = remainder;
-		}
-		return left;
 	}
 
 	private float GetCloseness(float normalizedDepth)
@@ -1336,6 +1495,7 @@ public partial class particles : CanvasLayer
 		return ImageTexture.CreateFromImage(image);
 	}
 
+	private readonly record struct ReleasedMaskSample(Vector2 Position, float NormalizedDepth, bool IsScreenPosition);
 	private readonly record struct OutwardSettings(float Lifetime, int Maximum, float Size, float Gravity,
 		float Damping, bool Turbulence, float Influence, float Scale, float Evolution);
 }
