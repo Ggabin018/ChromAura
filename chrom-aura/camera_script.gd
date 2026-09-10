@@ -17,15 +17,15 @@ extends Control
 @export_range(0.2, 1.5, 0.05) var debug_body_near_scale := 1.05
 @export var debug_body_arm_extended := true
 
-@onready var depth_camera: DepthCameraNode = $DepthCameraNode
-@onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
-@onready var gesture_engine: HandGestureEngine = $HandGestureEngine
-@onready var hand_detection_layer: CanvasLayer = $HandDetectionLayer
-@onready var status_label: Label = $Status
-@onready var body_status_label: RichTextLabel = $BodyStatus
-@onready var gesture_status_label: Label = $GestureStatus
-@onready var rgb_debug_layer: CanvasLayer = $RgbDebugLayer
-@onready var rgb_debug_view: TextureRect = $RgbDebugLayer/CameraView
+@onready var depth_camera: DepthCameraNode = get_node_or_null("DepthCameraNode")
+@onready var hand_overlay: HandOverlay = get_node_or_null("HandDetectionLayer/HandOverlay")
+@onready var gesture_engine: HandGestureEngine = get_node_or_null("HandGestureEngine")
+@onready var hand_detection_layer: CanvasLayer = get_node_or_null("HandDetectionLayer")
+@onready var status_label: Label = get_node_or_null("Status")
+@onready var body_status_label: RichTextLabel = get_node_or_null("BodyStatus")
+@onready var gesture_status_label: Label = get_node_or_null("GestureStatus")
+@onready var rgb_debug_layer: CanvasLayer = get_node_or_null("RgbDebugLayer")
+@onready var rgb_debug_view: TextureRect = get_node_or_null("RgbDebugLayer/CameraView")
 
 @export_range(0.0, 1.0, 0.01)
 var depth_min_for_color := 0.65
@@ -87,18 +87,23 @@ func _ready() -> void:
 	depth_camera.max_depth = 3.0
 	depth_camera.auto_reconnect = true
 
-	hand_overlay.visible = false
-	hand_detection_layer.visible = false
-	status_label.visible = false
+	if is_instance_valid(hand_overlay):
+		hand_overlay.visible = false
+	if is_instance_valid(hand_detection_layer):
+		hand_detection_layer.visible = false
+	if is_instance_valid(status_label):
+		status_label.visible = false
 	if is_instance_valid(body_status_label):
 		body_status_label.visible = false
-	gesture_status_label.visible = false
+	if is_instance_valid(gesture_status_label):
+		gesture_status_label.visible = false
 	if is_instance_valid(gesture_engine):
 		gesture_engine.activation_threshold = 0.65
 		gesture_engine.maintenance_threshold = 0.45
 		gesture_engine.activation_delay_ms = 60
 		gesture_engine.release_delay_ms = 250
-	rgb_debug_layer.visible = false
+	if is_instance_valid(rgb_debug_layer):
+		rgb_debug_layer.visible = false
 	set_process_input(true)
 
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
@@ -112,7 +117,8 @@ func _ready() -> void:
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
-	depth_camera.start_streaming()
+	if is_instance_valid(depth_camera):
+		depth_camera.start_streaming()
 	if debug_body_enabled:
 		_push_debug_body_mask()
 
@@ -120,18 +126,23 @@ func _ready() -> void:
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("rgb-debug-toggle"):
 		rgb_debug_toggled = not rgb_debug_toggled
-		rgb_debug_layer.visible = rgb_debug_toggled
+		if is_instance_valid(rgb_debug_layer):
+			rgb_debug_layer.visible = rgb_debug_toggled
 		get_viewport().set_input_as_handled()
 		return
 
 	if event.is_action_pressed("dev-mode-toggle"):
 		dev_mode_toggled = not dev_mode_toggled
-		hand_detection_layer.visible = dev_mode_toggled
-		hand_overlay.visible = dev_mode_toggled
-		status_label.visible = dev_mode_toggled
+		if is_instance_valid(hand_detection_layer):
+			hand_detection_layer.visible = dev_mode_toggled
+		if is_instance_valid(hand_overlay):
+			hand_overlay.visible = dev_mode_toggled
+		if is_instance_valid(status_label):
+			status_label.visible = dev_mode_toggled
 		if is_instance_valid(body_status_label):
 			body_status_label.visible = dev_mode_toggled
-		gesture_status_label.visible = dev_mode_toggled and gesture_status_label.text != ""
+		if is_instance_valid(gesture_status_label):
+			gesture_status_label.visible = dev_mode_toggled and gesture_status_label.text != ""
 
 
 func _process(delta: float) -> void:
@@ -235,6 +246,8 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 
 
 func _update_rgb_debug_view(image: Image) -> void:
+	if not is_instance_valid(rgb_debug_view):
+		return
 	if (
 		_rgb_debug_texture == null
 		or _rgb_debug_texture.get_width() != image.get_width()
@@ -413,19 +426,21 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		audio_manager.set_drawing(is_pointing)
 
 	if dev_mode_toggled:
-		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
+		if is_instance_valid(hand_overlay) and is_instance_valid(gesture_engine):
+			hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
 		var is_easter_egg_active := timestamp_ms < _wilhelm_easter_egg_active_until_ms
-		gesture_status_label.visible = not detections.is_empty() or is_easter_egg_active
-		if gesture_status_label.visible:
-			var messages: Array[String] = []
-			if is_easter_egg_active:
-				messages.append("WILHELM SCREAM!")
-			for detection in detections:
-				messages.append(
-					"#%d %s (%.0f%%)"
-					% [detection.track_id, detection.gesture, detection.score * 100.0]
-				)
-			gesture_status_label.text = "  |  ".join(messages)
+		if is_instance_valid(gesture_status_label):
+			gesture_status_label.visible = not detections.is_empty() or is_easter_egg_active
+			if gesture_status_label.visible:
+				var messages: Array[String] = []
+				if is_easter_egg_active:
+					messages.append("WILHELM SCREAM!")
+				for detection in detections:
+					messages.append(
+						"#%d %s (%.0f%%)"
+						% [detection.track_id, detection.gesture, detection.score * 100.0]
+					)
+				gesture_status_label.text = "  |  ".join(messages)
 	elif is_instance_valid(gesture_status_label):
 		gesture_status_label.visible = false
 
