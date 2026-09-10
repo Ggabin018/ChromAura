@@ -58,6 +58,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 9.0
+offset_top = 1.0
+offset_right = 9.0
+offset_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -140,8 +144,8 @@ script = ExtResource("6_efxa6")
 [node name="DrawInstruction" type="PanelContainer" parent="Control/DrawInstructionLayer" unique_id=987654321]
 offset_left = 20.0
 offset_top = 20.0
-offset_right = 335.0
-offset_bottom = 78.0
+offset_right = 320.0
+offset_bottom = 74.0
 
 [node name="Dessinez" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=67839875]
 visible = false
@@ -197,13 +201,13 @@ theme_override_constants/separation = 14
 alignment = 1
 
 [node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/EGWilhelmScream" unique_id=1891085383]
-visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
 theme_override_constants/shadow_offset_x = 2
 theme_override_constants/shadow_offset_y = 2
 theme_override_font_sizes/font_size = 28
+text = "Wilhelm"
 vertical_alignment = 1
 
 [node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/EGWilhelmScream" unique_id=2092522622]
