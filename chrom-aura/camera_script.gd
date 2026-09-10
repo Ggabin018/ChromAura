@@ -34,10 +34,12 @@ var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
 
+var _six_seven_mode_until_ms := 0
 var _six_seven_last_pulse_ms: Dictionary = {}
-var _six_seven_was_moving_up: Dictionary = {}
-const SIX_SEVEN_PULSE_COOLDOWN_MS := 220
-const SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD := -0.18
+var _prev_palm_y: Dictionary = {}
+var _prev_palm_time_ms: Dictionary = {}
+const SIX_SEVEN_PULSE_COOLDOWN_MS := 180
+const SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD := -0.07
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -217,28 +219,47 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		audio_manager.set_drawing(is_pointing)
 
 	# Geste Six-Seven (6-7) : Deux mains paumes vers le haut (PALM_UP) + impulsion verticale à chaque levée
-	var palm_up_poses: Array[HandPose] = []
-	for pose in gesture_engine.get_hand_poses():
+	# Geste Six-Seven (6-7) : Deux mains paumes vers le haut verrouillent le mode
+	var all_poses := gesture_engine.get_hand_poses()
+	var palm_up_count := 0
+	for pose in all_poses:
 		if pose.gesture == HandGestureEngine.PALM_UP:
-			palm_up_poses.append(pose)
+			palm_up_count += 1
 
-	if palm_up_poses.size() >= 2:
-		for pose in palm_up_poses:
-			var vy: float = pose.velocity_uv.y
+	# Dès que 2 mains sont détectées en posture, rémanence de 1.4s pour garder le mode actif
+	# pendant toute la durée des mouvements et balancements des bras
+	if palm_up_count >= 2:
+		_six_seven_mode_until_ms = timestamp_ms + 1400
+
+	var six_seven_active := (timestamp_ms <= _six_seven_mode_until_ms)
+
+	if six_seven_active:
+		for pose in all_poses:
+			if is_instance_valid(particles_layer) and particles_layer.has_method("TriggerSixSevenIdle"):
+				particles_layer.TriggerSixSevenIdle(pose.palm_center_uv, pose.track_id)
+
+			# Vélocité instantanée non lissée pour réaction immédiate à la levée
+			var cur_y: float = pose.palm_center_uv.y
+			var prev_y: float = _prev_palm_y.get(pose.track_id, cur_y)
+			var prev_t: int = _prev_palm_time_ms.get(pose.track_id, timestamp_ms - 16)
+			var dt: float = maxf(float(timestamp_ms - prev_t) / 1000.0, 0.001)
+			var instant_vy: float = (cur_y - prev_y) / dt
+			_prev_palm_y[pose.track_id] = cur_y
+			_prev_palm_time_ms[pose.track_id] = timestamp_ms
+
+			# Combinaison de la vélocité instantanée et filtrée
+			var best_vy: float = minf(instant_vy, pose.velocity_uv.y)
 			var last_pulse: int = _six_seven_last_pulse_ms.get(pose.track_id, -1)
-			var was_moving_up: bool = _six_seven_was_moving_up.get(pose.track_id, false)
-			if vy < SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD:
-				if (not was_moving_up) or (timestamp_ms - last_pulse >= SIX_SEVEN_PULSE_COOLDOWN_MS):
+
+			if best_vy < SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD:
+				if timestamp_ms - last_pulse >= SIX_SEVEN_PULSE_COOLDOWN_MS:
 					_six_seven_last_pulse_ms[pose.track_id] = timestamp_ms
-					_six_seven_was_moving_up[pose.track_id] = true
-					var strength := clampf(absf(vy) / 0.42, 0.7, 1.8)
+					var strength := clampf(absf(best_vy) / 0.28, 0.8, 1.9)
 					if is_instance_valid(particles_layer) and particles_layer.has_method("TriggerSixSevenPulse"):
 						particles_layer.TriggerSixSevenPulse(pose.palm_center_uv, pose.track_id, strength)
 					if is_instance_valid(audio_manager) and audio_manager.has_method("play_six_seven_pulse"):
-						var pitch := lerpf(0.92, 1.22, (strength - 0.7) / 1.1)
+						var pitch := lerpf(0.92, 1.25, (strength - 0.8) / 1.1)
 						audio_manager.play_six_seven_pulse(pitch)
-			elif vy >= -0.06:
-				_six_seven_was_moving_up[pose.track_id] = false
 
 	if dev_mode_toggled:
 		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
@@ -250,8 +271,8 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 					"#%d %s (%.0f%%)"
 					% [detection.track_id, detection.gesture, detection.score * 100.0]
 				)
-			if palm_up_poses.size() >= 2:
-				messages.append("✨ [SIX-SEVEN] ✨")
+			if six_seven_active:
+				messages.append("✨ [SIX-SEVEN ACTIVE] ✨")
 			gesture_status_label.text = "  |  ".join(messages)
 	else:
 		gesture_status_label.visible = false
@@ -259,7 +280,8 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 func _on_hand_lost(track_id: int) -> void:
 	_six_seven_last_pulse_ms.erase(track_id)
-	_six_seven_was_moving_up.erase(track_id)
+	_prev_palm_y.erase(track_id)
+	_prev_palm_time_ms.erase(track_id)
 
 
 func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:

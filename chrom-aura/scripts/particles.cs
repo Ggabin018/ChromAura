@@ -411,6 +411,19 @@ public partial class particles : CanvasLayer
 		EmitSignal(SignalName.SixSevenPulseTriggered, trackId, screenAnchor);
 	}
 
+	/// <summary>
+	/// Émet une aura lumineuse continue douce sur les paumes tant que la posture 6-7 est active.
+	/// </summary>
+	public void TriggerSixSevenIdle(Vector2 normalizedAnchor, int trackId)
+	{
+		var screenAnchor = NormalizedToScreen(normalizedAnchor);
+		_sixSevenParticleManager.EmitSixSevenIdle(
+			screenAnchor,
+			trackId,
+			GetPaletteIndexForTrack
+		);
+	}
+
 	private int GetPaletteIndexForTrack(int trackId)
 	{
 		for (var b = 0; b < _bodyDetector.TrackedBodies.Count; b++)

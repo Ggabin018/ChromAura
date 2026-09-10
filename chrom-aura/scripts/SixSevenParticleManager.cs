@@ -60,6 +60,57 @@ public sealed class SixSevenParticleManager
 	}
 
 	/// <summary>
+	/// Émet une aura lumineuse continue douce sur les paumes tant que la posture 6-7 est maintenue.
+	/// </summary>
+	public void EmitSixSevenIdle(
+		Vector2 screenAnchor,
+		int trackId,
+		Func<int, int> getPaletteIndexForTrack)
+	{
+		if (_palettes.Length == 0 || _beamParticleSystems.Length == 0)
+			return;
+
+		var paletteIndex = getPaletteIndexForTrack(trackId) % _palettes.Length;
+		var palette = _palettes[paletteIndex];
+
+		// Éclat doux au creux de la paume
+		var flareColor = BoostColor(palette.TrailStart.Lerp(Colors.White, 0.45f), 0.85f);
+		_flareParticleSystems[paletteIndex].EmitParticle(
+			new Transform2D(0.0f, screenAnchor + RandomOffset(6.0f)),
+			new Vector2(_random.RandfRange(-6.0f, 6.0f), _random.RandfRange(-35.0f, -10.0f)),
+			flareColor,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+
+		// 1-2 rayons verticaux ascendants
+		var speed = _random.RandfRange(400.0f, 850.0f);
+		var upwardDir = Vector2.Up.Rotated(_random.RandfRange(-0.08f, 0.08f));
+		var rayColor = BoostColor(palette.EvaluateTrail(_random.Randf()).Lerp(Colors.White, 0.5f), 0.90f);
+		_beamParticleSystems[paletteIndex].EmitParticle(
+			new Transform2D(upwardDir.Angle() + Mathf.Pi * 0.5f, screenAnchor + new Vector2(_random.RandfRange(-12.0f, 12.0f), 0.0f)),
+			upwardDir * speed,
+			rayColor,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+
+		// Étincelle volante
+		if (_random.Randf() < 0.65f)
+		{
+			var sparkDir = Vector2.Up.Rotated(_random.RandfRange(-0.35f, 0.35f));
+			var sparkColor = BoostColor(palette.ColorNear.Lerp(Colors.White, 0.5f), 0.95f);
+			_sparkParticleSystems[paletteIndex].EmitParticle(
+				new Transform2D(_random.RandfRange(0.0f, Mathf.Tau), screenAnchor + RandomOffset(4.0f)),
+				sparkDir * _random.RandfRange(250.0f, 600.0f),
+				sparkColor,
+				Colors.White,
+				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+			);
+		}
+	}
+
+	/// <summary>
 	/// Déclenche une impulsion de geyser d'énergie vertical au niveau de la paume.
 	/// </summary>
 	public void EmitSixSevenPulse(

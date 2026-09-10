@@ -246,25 +246,34 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 		landmarks, PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP
 	)
 
-	# Palm Up (6-7): All 4 fingers extended and wrist lower than palm
-	var four_fingers_ext := (index_extended + middle_extended + ring_extended + pinky_extended) * 0.25
-	var min_finger_ext := minf(minf(index_extended, middle_extended), minf(ring_extended, pinky_extended))
-	var hand_open_shape := 0.60 * four_fingers_ext + 0.40 * min_finger_ext
+	# Palm Up (6-7): Hand extending forward with palm plane horizontal / facing up,
+	# strictly rejecting vertical hands standing flat against camera ("dos à la caméra").
+	var p_wrist: Vector3 = pose.landmarks_3d[WRIST]
+	var p_index: Vector3 = pose.landmarks_3d[INDEX_MCP]
+	var p_middle: Vector3 = pose.landmarks_3d[MIDDLE_MCP]
+	var p_pinky: Vector3 = pose.landmarks_3d[PINKY_MCP]
 
-	var wrist_uv: Vector2 = pose.landmarks_2d[WRIST]
-	var palm_uv: Vector2 = pose.palm_center_uv
-	var up_vec_2d := (palm_uv - wrist_uv)
-	var upward_orientation := 0.0
-	if not up_vec_2d.is_zero_approx():
-		var dot_up := (-up_vec_2d.normalized()).dot(Vector2.UP)
-		upward_orientation = _smoothstep(-0.25, 0.40, dot_up)
-	else:
-		upward_orientation = 0.50
+	var hand_along := p_middle - p_wrist
+	var hand_across := p_index - p_pinky
+	var palm_up_score := 0.0
 
-	var palm_up_score := hand_open_shape * (0.35 + 0.65 * upward_orientation)
-	if hand_open_shape < 0.35:
-		palm_up_score *= 0.10
-	palm_up_score = clampf(palm_up_score, 0.0, 1.0)
+	if hand_along.length_squared() > 0.0001 and hand_across.length_squared() > 0.0001:
+		var y_dir := hand_along.normalized()
+		var x_dir := hand_across.normalized()
+		var normal := x_dir.cross(y_dir).normalized()
+
+		# Vertical palm normal component (palm plane horizontal)
+		var palm_flat_score := _smoothstep(0.12, 0.42, absf(normal.y))
+
+		# Rejection of vertical hand standing flat in camera plane ("dos à la caméra"):
+		# Only reject if palm normal is pointing directly along camera Z AND hand is purely upright along Y
+		var is_dos_camera := (
+			_smoothstep(0.70, 0.88, absf(normal.z))
+			* _smoothstep(0.78, 0.94, absf(y_dir.y))
+		)
+
+		palm_up_score = palm_flat_score * (1.0 - 0.85 * is_dos_camera)
+		palm_up_score = clampf(palm_up_score, 0.0, 1.0)
 
 	if finger_gun_score >= 0.70:
 		two_finger_pointing_score = minf(two_finger_pointing_score, finger_gun_score - 0.10)
