@@ -11,10 +11,12 @@ extends Node
 	"res://assets/audio/ambient_2.mp3"
 ]
 @export var glitter_track_path: String = "res://assets/audio/glitter.mp3"
+@export var heart_track_path: String = "res://assets/audio/heart.mp3"
 
 @export_group("Volumes (dB)")
 @export_range(-80.0, 6.0, 0.5) var ambient_volume_db: float = -8.0
 @export_range(-80.0, 6.0, 0.5) var glitter_volume_db: float = -2.0
+@export_range(-80.0, 6.0, 0.5) var heart_volume_db: float = 0.0
 
 @export_group("Transitions")
 ## Durée du crossfade entre deux musiques d'ambiance (en secondes)
@@ -25,6 +27,8 @@ extends Node
 @export var glitter_fade_in_time: float = 0.35
 ## Durée du fondu de sortie lorsque l'utilisateur cesse de dessiner
 @export var glitter_fade_out_time: float = 0.70
+@export var heart_fade_in_time: float = 0.25
+@export var heart_fade_out_time: float = 0.60
 
 var _ambient_players: Array[AudioStreamPlayer] = []
 var _ambient_streams: Array[AudioStream] = []
@@ -33,13 +37,19 @@ var _active_player_slot: int = 0
 
 var _glitter_player: AudioStreamPlayer
 var _glitter_stream: AudioStream
-
-var _ambient_tween: Tween
 var _glitter_tween: Tween
 var _is_drawing: bool = false
-var _crossfading: bool = false
 var _last_pointing_time_ms: int = 0
 var _stop_drawing_time_ms: int = 0
+
+var _heart_music_player: AudioStreamPlayer
+var _heart_music_stream: AudioStream
+var _heart_music_tween: Tween
+var _is_heart_playing: bool = false
+var _stop_heart_time_ms: int = 0
+
+var _ambient_tween: Tween
+var _crossfading: bool = false
 
 var _shot_players: Array[AudioStreamPlayer] = []
 var _shot_stream: AudioStreamWAV = null
@@ -92,6 +102,12 @@ func _setup_audio_players() -> void:
 		hp.stream = _heart_stream
 		add_child(hp)
 		_heart_players.append(hp)
+
+	_heart_music_player = AudioStreamPlayer.new()
+	_heart_music_player.name = "HeartMusicPlayer"
+	_heart_music_player.bus = "Master"
+	_heart_music_player.volume_db = -80.0
+	add_child(_heart_music_player)
 
 
 func _create_shot_stream() -> AudioStreamWAV:
@@ -210,6 +226,10 @@ func _load_audio_resources() -> void:
 	if is_instance_valid(_glitter_player) and _glitter_stream != null:
 		_glitter_player.stream = _glitter_stream
 
+	_heart_music_stream = _load_stream(heart_track_path, true)
+	if is_instance_valid(_heart_music_player) and _heart_music_stream != null:
+		_heart_music_player.stream = _heart_music_stream
+
 
 func start_ambient() -> void:
 	if not is_inside_tree() or _ambient_streams.is_empty():
@@ -321,4 +341,35 @@ func set_drawing(drawing: bool) -> void:
 		_glitter_tween.tween_callback(func():
 			if not _is_drawing and _glitter_player.playing:
 				_glitter_player.stream_paused = true
+		)
+
+
+## Appelée lors de la détection d'un geste coeur (FINGER_HEART ou TWO_HAND_HEART)
+func set_heart_music(active: bool) -> void:
+	if _is_heart_playing == active:
+		return
+
+	_is_heart_playing = active
+
+	if not is_inside_tree() or not is_instance_valid(_heart_music_player) or _heart_music_stream == null:
+		return
+
+	if _heart_music_tween and _heart_music_tween.is_valid():
+		_heart_music_tween.kill()
+	_heart_music_tween = create_tween()
+
+	if _is_heart_playing:
+		var now := Time.get_ticks_msec()
+		if (now - _stop_heart_time_ms) > 2000 or not _heart_music_player.playing:
+			_heart_music_player.play(0.0)
+		elif _heart_music_player.stream_paused:
+			_heart_music_player.stream_paused = false
+
+		_heart_music_tween.tween_property(_heart_music_player, "volume_db", heart_volume_db, heart_fade_in_time)
+	else:
+		_stop_heart_time_ms = Time.get_ticks_msec()
+		_heart_music_tween.tween_property(_heart_music_player, "volume_db", -80.0, heart_fade_out_time)
+		_heart_music_tween.tween_callback(func():
+			if not _is_heart_playing and _heart_music_player.playing:
+				_heart_music_player.stream_paused = true
 		)

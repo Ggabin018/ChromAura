@@ -227,15 +227,12 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateGunState"):
 		particles_layer.UpdateGunState(gun_detections)
 
+	var is_heart := not heart_detections.is_empty()
 	if is_instance_valid(heart_particle_manager) and heart_particle_manager.has_method("update_heart_state"):
 		heart_particle_manager.update_heart_state(heart_detections)
 
-	if not heart_detections.is_empty():
-		var now_ms := Time.get_ticks_msec()
-		if now_ms - _last_heart_audio_time_ms >= 420:
-			_last_heart_audio_time_ms = now_ms
-			if is_instance_valid(audio_manager) and audio_manager.has_method("play_heart_sound"):
-				audio_manager.play_heart_sound()
+	if is_instance_valid(audio_manager) and audio_manager.has_method("set_heart_music"):
+		audio_manager.set_heart_music(is_heart)
 
 	_update_draw_instruction(is_pointing)
 
