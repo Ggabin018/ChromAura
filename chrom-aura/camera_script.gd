@@ -409,7 +409,7 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 	var label_node := draw_instruction.get_node_or_null("HBoxContainer/Label") as Label
 	if is_instance_valid(label_node) and is_instance_valid(particles_layer) and "GravityEnabled" in particles_layer:
 		var is_physics: bool = bool(particles_layer.GravityEnabled)
-		label_node.text = "Dessinez (Physique)" if is_physics else "Dessinez"
+		label_node.text = "Dessinez (Gravité)" if is_physics else "Dessinez"
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
