@@ -6,7 +6,8 @@ using System.Collections.Generic;
 /// <summary>
 /// Gestionnaire principal de rendu de particules (ChromAura).
 /// Gère les systèmes de particules GPU pour la silhouette corporelle et les tracés de dessin,
-/// applique les palettes de couleurs par corps détecté et délègue la segmentation à BodyDetector.
+/// applique les palettes de couleurs par corps détecté, délègue la segmentation à BodyDetector,
+/// et convertit les tracés terminés en corps rigides physiques 2D (avec bascule de gravité Touche 2).
 /// </summary>
 public partial class particles : CanvasLayer
 {
@@ -78,6 +79,13 @@ public partial class particles : CanvasLayer
 	/// <summary>Décalage manuel des palettes (Touche P) pour tester les 5 palettes avec un seul utilisateur.</summary>
 	[Export] public int PaletteOffset { get; set; } = 0;
 
+	[ExportGroup("Physique et Dessin")]
+	/// <summary>Active ou désactive la gravité sur les objets dessinés (Bascule avec la touche 2).</summary>
+	[Export] public bool GravityEnabled { get; set; } = false;
+
+	/// <summary>Épaisseur (rayon) des collisionneurs physiques pour les tracés dessinés.</summary>
+	[Export] public float DrawingColliderRadius { get; set; } = 10.0f;
+
 	// =========================================================================
 	// PROPRIÉTÉS PUBLIQUES
 	// =========================================================================
@@ -99,14 +107,28 @@ public partial class particles : CanvasLayer
 	private readonly List<Vector2> _prevFingerScreenPos = new();
 	private readonly RandomNumberGenerator _random = new();
 
-	// Un seul pipeline visuel brume/scintillement pour le corps,
-	// et un double pipeline (cœur fluide lumineux + poussière d'étoiles) pour le tracé de dessin.
+	// Pipelines visuels particules GPU (corps + tracé en direct)
 	private readonly GpuParticles2D[] _mistParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _sparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _trailCoreParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _trailSparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
 	private readonly List<Vector2> _smoothedFingerPos = new();
+
+	private sealed class ActiveStroke
+	{
+		public List<Vector2> Points { get; } = new();
+		public int PaletteIndex { get; set; }
+	}
+
+	// Système de capture de tracé et instanciation physique
+	private readonly Dictionary<int, ActiveStroke> _activeFingerStrokes = new();
+	private readonly List<DrawnBody2D> _spawnedDrawnBodies = new();
+	private Node2D _physicsContainer = null!;
+	private StaticBody2D? _boundaryBody;
+	private CollisionShape2D? _floorShape;
+	private CollisionShape2D? _leftWallShape;
+	private CollisionShape2D? _rightWallShape;
 
 	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
@@ -140,6 +162,12 @@ public partial class particles : CanvasLayer
 			AddChild(_trailSparkleParticleSystems[i]);
 		}
 
+		// Initialisation du conteneur pour tous les corps physiques dessinés
+		_physicsContainer = new Node2D { Name = "PhysicalDrawings" };
+		AddChild(_physicsContainer);
+
+		SetupBoundaries();
+
 		// Initialisation de l'overlay de débug séparé
 		_debugOverlay = new BodyDebugOverlay();
 		_debugOverlay.Initialize(this);
@@ -153,13 +181,15 @@ public partial class particles : CanvasLayer
 		_lastFingerUpdateTime += delta;
 		var isPointingActive = _isPointingUp && (_lastFingerUpdateTime < 0.35);
 
-		// 1. Émission des tracés lumineux le long de la trajectoire des doigts pointés
+		// 1. Émission des particules pendant le dessin et capture silencieuse du tracé
 		if (isPointingActive && _currentFingers.Count > 0)
 		{
 			EmitFingerTrails();
+			RecordLiveDrawingStrokes();
 		}
 		else
 		{
+			FinalizeAllActiveStrokes();
 			_prevFingerScreenPos.Clear();
 			_smoothedFingerPos.Clear();
 		}
@@ -181,12 +211,27 @@ public partial class particles : CanvasLayer
 	/// <summary>
 	/// Gestion des raccourcis clavier utilisateur pour le contrôle en temps réel.
 	/// </summary>
-	public override void _UnhandledInput(InputEvent @event)
+	public override void _Input(InputEvent @event)
 	{
 		if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
 		{
+			var physicalKey = keyEvent.PhysicalKeycode;
+			var keycode = keyEvent.Keycode;
+			var unicode = (char)keyEvent.Unicode;
+
+			// Touche 2 (AZERTY é, QWERTY 2, Pavé num 2) : Bascule de la gravité
+			if (physicalKey == Key.Key2 || keycode == Key.Key2 || keycode == Key.Kp2 ||
+				unicode == '2' || unicode == 'é')
+			{
+				ToggleGravity();
+			}
+			// Touche C : Nettoyer tous les dessins
+			else if (physicalKey == Key.C || keycode == Key.C || unicode == 'c' || unicode == 'C')
+			{
+				ClearAllDrawings();
+			}
 			// Touche D : Bascule de l'affichage des boîtes de débug
-			if (keyEvent.Keycode == Key.D)
+			else if (physicalKey == Key.D || keycode == Key.D || unicode == 'd' || unicode == 'D')
 			{
 				ShowBodyDebug = !ShowBodyDebug;
 				if (_debugOverlay != null)
@@ -196,7 +241,7 @@ public partial class particles : CanvasLayer
 				}
 			}
 			// Touche P : Cycle manuel des palettes pour prévisualisation
-			else if (keyEvent.Keycode == Key.P)
+			else if (physicalKey == Key.P || keycode == Key.P || unicode == 'p' || unicode == 'P')
 			{
 				var palettes = BodyPalette.DefaultPalettes;
 				PaletteOffset = (PaletteOffset + 1) % palettes.Length;
@@ -295,7 +340,6 @@ public partial class particles : CanvasLayer
 
 	/// <summary>
 	/// Émet une particule de brume ou un scintillement sur la silhouette du corps.
-	/// La forme vient du rendu éthéré et la couleur de la palette du corps détecté.
 	/// </summary>
 	private void EmitSampledParticle(bool isPointingActive)
 	{
@@ -306,7 +350,6 @@ public partial class particles : CanvasLayer
 		var paletteIndex = sample.PaletteIndex % palettes.Length;
 		var palette = palettes[paletteIndex];
 
-		// La profondeur pilote à la fois la couleur et la proportion de scintillements.
 		var depthSpan = Mathf.Max(_bodyDetector.MaxDepth - _bodyDetector.MinDepth, 0.001f);
 		var closeness = Mathf.Clamp((sample.NormalizedDepth - _bodyDetector.MinDepth) / depthSpan, 0.0f, 1.0f);
 		var bodyColor = ColorFromDepth ? palette.EvaluateBody(closeness) : palette.ColorNear;
@@ -333,7 +376,6 @@ public partial class particles : CanvasLayer
 			return;
 		}
 
-		// La vague très légère anime la couleur de la brume sans changer l'identité de palette.
 		var wave = (float)Math.Sin(_elapsedTime * 1.5 + sample.Position.Y * 0.008f) * 0.12f;
 		var harmonicDepth = Mathf.Clamp(closeness + wave, 0.0f, 1.0f);
 		var mistBaseColor = ColorFromDepth ? palette.EvaluateBody(harmonicDepth) : bodyColor;
@@ -357,7 +399,6 @@ public partial class particles : CanvasLayer
 	/// </summary>
 	private void EmitFingerTrails()
 	{
-		// Synchronisation de la taille des tampons de positions précédentes et lissées
 		if (_prevFingerScreenPos.Count != _currentFingers.Count)
 		{
 			_prevFingerScreenPos.Clear();
@@ -375,7 +416,6 @@ public partial class particles : CanvasLayer
 		for (var i = 0; i < _currentFingers.Count; i++)
 		{
 			var rawScreen = NormalizedToScreen(_currentFingers[i]);
-			// Lissage exponentiel (EMA) pour absorber les micro-saccades de tracking MediaPipe
 			_smoothedFingerPos[i] = _smoothedFingerPos[i].Lerp(rawScreen, 0.58f);
 			var currentScreen = _smoothedFingerPos[i];
 			var prevScreen = _prevFingerScreenPos[i];
@@ -389,14 +429,11 @@ public partial class particles : CanvasLayer
 
 			if (distance < 500.0f)
 			{
-				// Pas d'échantillonnage serré pour un ruban néon ultra continu et sans trous
 				var steps = Mathf.Max(2, Mathf.CeilToInt(distance / 1.4f));
 				for (var s = 0; s <= steps; s++)
 				{
 					var t = (float)s / steps;
 					var center = prevScreen.Lerp(currentScreen, t);
-
-					// Cœur lumineux fluide au bout du doigt uniquement
 					EmitSingleTrailCoreParticle(center, paletteIndex, palette);
 				}
 			}
@@ -412,9 +449,6 @@ public partial class particles : CanvasLayer
 		}
 	}
 
-	/// <summary>
-	/// Émet une particule de cœur fluide lumineux pour le tracé de dessin.
-	/// </summary>
 	private void EmitSingleTrailCoreParticle(Vector2 basePosition, int paletteIndex, BodyPalette palette)
 	{
 		var offset = new Vector2(
@@ -437,34 +471,6 @@ public partial class particles : CanvasLayer
 		);
 	}
 
-	/// <summary>
-	/// Émet une particule de poussière d'étoiles scintillantes avec rotation et dispersion.
-	/// </summary>
-	private void EmitSingleTrailSparkleParticle(Vector2 basePosition, int paletteIndex, BodyPalette palette)
-	{
-		var angle = _random.RandfRange(0.0f, Mathf.Tau);
-		var radius = _random.RandfRange(1.0f, 10.0f);
-		var offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
-
-		var drift = new Vector2(
-			_random.RandfRange(-1.2f, 1.2f),
-			_random.RandfRange(-2.2f, 0.4f)
-		);
-
-		var sparkleColor = BoostColor(
-			palette.EvaluateTrail(_random.Randf()).Lerp(Colors.White, _random.RandfRange(0.30f, 0.75f)),
-			0.98f
-		);
-
-		_trailSparkleParticleSystems[paletteIndex].EmitParticle(
-			new Transform2D(_random.RandfRange(0.0f, Mathf.Tau), basePosition + offset),
-			drift,
-			sparkleColor,
-			Colors.White,
-			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
-		);
-	}
-
 	private Vector2 RandomOffset(float radius)
 	{
 		return new Vector2(
@@ -481,6 +487,230 @@ public partial class particles : CanvasLayer
 			color.B * EtherealGlowIntensity,
 			alpha
 		);
+	}
+
+	// =========================================================================
+	// GESTION DU DESSIN PHYSIQUE & LIMITES D'ÉCRAN
+	// =========================================================================
+
+	/// <summary>
+	/// Enregistre les points du geste en cours silencieusement (sans affichage vectoriel parasite).
+	/// </summary>
+	private void RecordLiveDrawingStrokes()
+	{
+		for (var i = 0; i < _currentFingers.Count; i++)
+		{
+			var currentScreen = (i < _smoothedFingerPos.Count)
+				? _smoothedFingerPos[i]
+				: NormalizedToScreen(_currentFingers[i]);
+
+			if (!_activeFingerStrokes.TryGetValue(i, out var stroke))
+			{
+				stroke = new ActiveStroke();
+				_activeFingerStrokes[i] = stroke;
+			}
+
+			// Conserver la palette exacte associée au doigt qui dessine
+			var paletteIndex = (i < _fingerPaletteIndices.Count)
+				? (_fingerPaletteIndices[i] % BodyPalette.DefaultPalettes.Length)
+				: (PaletteOffset % BodyPalette.DefaultPalettes.Length);
+			stroke.PaletteIndex = paletteIndex;
+
+			if (stroke.Points.Count == 0 || stroke.Points[^1].DistanceTo(currentScreen) >= 4.0f)
+			{
+				stroke.Points.Add(currentScreen);
+			}
+		}
+
+		// Finalise les traits pour les doigts qui ont arrêté de pointer
+		var activeIndices = new HashSet<int>();
+		for (var i = 0; i < _currentFingers.Count; i++)
+		{
+			activeIndices.Add(i);
+		}
+
+		var fingersToFinalize = new List<int>();
+		foreach (var fingerIdx in _activeFingerStrokes.Keys)
+		{
+			if (!activeIndices.Contains(fingerIdx))
+			{
+				fingersToFinalize.Add(fingerIdx);
+			}
+		}
+
+		foreach (var fingerIdx in fingersToFinalize)
+		{
+			FinalizeStroke(fingerIdx);
+		}
+	}
+
+	/// <summary>
+	/// Finalise tous les tracés actifs quand le geste s'arrête.
+	/// </summary>
+	private void FinalizeAllActiveStrokes()
+	{
+		if (_activeFingerStrokes.Count == 0)
+			return;
+
+		var fingers = new List<int>(_activeFingerStrokes.Keys);
+		foreach (var fingerIdx in fingers)
+		{
+			FinalizeStroke(fingerIdx);
+		}
+		_activeFingerStrokes.Clear();
+	}
+
+	/// <summary>
+	/// Convertit le tracé d'un doigt en corps rigide physique DrawnBody2D (uniquement si Touche 2 est active).
+	/// </summary>
+	private void FinalizeStroke(int fingerIndex)
+	{
+		if (!_activeFingerStrokes.TryGetValue(fingerIndex, out var stroke))
+			return;
+
+		// Uniquement créer un objet physique si le mode physique (Touche 2) est enclenché
+		if (GravityEnabled && stroke.Points.Count >= 2 && GetPolylineLength(stroke.Points) > 8.0f)
+		{
+			var palettes = BodyPalette.DefaultPalettes;
+			var paletteIndex = stroke.PaletteIndex % palettes.Length;
+			var palette = palettes[paletteIndex];
+
+			var drawnBody = new DrawnBody2D();
+			_physicsContainer.AddChild(drawnBody);
+			drawnBody.Initialize(
+				stroke.Points,
+				palette,
+				true,
+				DrawingColliderRadius
+			);
+			_spawnedDrawnBodies.Add(drawnBody);
+			CheckMaxDrawnBodies();
+
+			// Supprime immédiatement les particules résiduelles pour que seul l'objet physique subsiste
+			_trailCoreParticleSystems[paletteIndex].Restart();
+			_trailCoreParticleSystems[paletteIndex].Emitting = false;
+			_trailSparkleParticleSystems[paletteIndex].Restart();
+			_trailSparkleParticleSystems[paletteIndex].Emitting = false;
+		}
+
+		_activeFingerStrokes.Remove(fingerIndex);
+	}
+
+	private static float GetPolylineLength(IReadOnlyList<Vector2> points)
+	{
+		var length = 0.0f;
+		for (var i = 0; i < points.Count - 1; i++)
+		{
+			length += points[i].DistanceTo(points[i + 1]);
+		}
+		return length;
+	}
+
+	private void CheckMaxDrawnBodies()
+	{
+		const int maxBodies = 120;
+		while (_spawnedDrawnBodies.Count > maxBodies)
+		{
+			var oldest = _spawnedDrawnBodies[0];
+			_spawnedDrawnBodies.RemoveAt(0);
+			if (IsInstanceValid(oldest))
+			{
+				oldest.QueueFree();
+			}
+		}
+	}
+
+	/// <summary>
+	/// Bascule l'état de gravité pour tous les objets dessinés (Touche 2).
+	/// </summary>
+	public void ToggleGravity()
+	{
+		GravityEnabled = !GravityEnabled;
+		foreach (var body in _spawnedDrawnBodies)
+		{
+			if (IsInstanceValid(body))
+			{
+				body.SetGravityActive(GravityEnabled);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Efface tous les objets dessinés (Touche C).
+	/// </summary>
+	public void ClearAllDrawings()
+	{
+		foreach (var body in _spawnedDrawnBodies)
+		{
+			if (IsInstanceValid(body))
+			{
+				body.QueueFree();
+			}
+		}
+		_spawnedDrawnBodies.Clear();
+		_activeFingerStrokes.Clear();
+
+		for (var i = 0; i < BodyPalette.DefaultPalettes.Length; i++)
+		{
+			_trailCoreParticleSystems[i].Restart();
+			_trailCoreParticleSystems[i].Emitting = false;
+			_trailSparkleParticleSystems[i].Restart();
+			_trailSparkleParticleSystems[i].Emitting = false;
+		}
+	}
+
+	private void SetupBoundaries()
+	{
+		_boundaryBody = new StaticBody2D { Name = "ScreenBoundaries" };
+
+		_floorShape = new CollisionShape2D();
+		_leftWallShape = new CollisionShape2D();
+		_rightWallShape = new CollisionShape2D();
+
+		_boundaryBody.AddChild(_floorShape);
+		_boundaryBody.AddChild(_leftWallShape);
+		_boundaryBody.AddChild(_rightWallShape);
+
+		AddChild(_boundaryBody);
+
+		UpdateBoundaryPositions();
+		GetViewport().SizeChanged += UpdateBoundaryPositions;
+	}
+
+	private void UpdateBoundaryPositions()
+	{
+		var viewportSize = GetViewport().GetVisibleRect().Size;
+		if (viewportSize.X <= 0 || viewportSize.Y <= 0)
+			return;
+
+		const float wallThickness = 120.0f;
+
+		if (_floorShape != null)
+		{
+			_floorShape.Shape = new RectangleShape2D
+			{
+				Size = new Vector2(viewportSize.X * 2.0f, wallThickness)
+			};
+			_floorShape.Position = new Vector2(viewportSize.X * 0.5f, viewportSize.Y + (wallThickness * 0.5f));
+		}
+
+		if (_leftWallShape != null)
+		{
+			_leftWallShape.Shape = new RectangleShape2D
+			{
+				Size = new Vector2(wallThickness, viewportSize.Y * 2.0f)
+			};
+			_leftWallShape.Position = new Vector2(-(wallThickness * 0.5f), viewportSize.Y * 0.5f);
+		}
+
+		if (_rightWallShape != null)
+		{
+			_rightWallShape.Shape = new RectangleShape2D
+			{
+				Size = new Vector2(wallThickness, viewportSize.Y * 2.0f)
+			};
+			_rightWallShape.Position = new Vector2(viewportSize.X + (wallThickness * 0.5f), viewportSize.Y * 0.5f);
+		}
 	}
 
 	// =========================================================================
@@ -516,9 +746,6 @@ public partial class particles : CanvasLayer
 	// FABRIQUE DE SYSTÈMES ET MATÉRIAUX GPU
 	// =========================================================================
 
-	/// <summary>
-	/// Crée le système de brume douce d'une palette de corps.
-	/// </summary>
 	private GpuParticles2D CreateMistParticleSystem(BodyPalette palette)
 	{
 		var alphaCurve = new Curve();
@@ -566,9 +793,6 @@ public partial class particles : CanvasLayer
 		};
 	}
 
-	/// <summary>
-	/// Crée le système de scintillements en forme d'étoile d'une palette de corps.
-	/// </summary>
 	private GpuParticles2D CreateSparkleParticleSystem(BodyPalette palette)
 	{
 		var alphaCurve = new Curve();
@@ -617,9 +841,6 @@ public partial class particles : CanvasLayer
 		};
 	}
 
-	/// <summary>
-	/// Crée le système de cœur fluide lumineux du tracé de dessin.
-	/// </summary>
 	private GpuParticles2D CreateTrailCoreParticleSystem(BodyPalette palette)
 	{
 		var gradient = new Gradient();
@@ -669,9 +890,6 @@ public partial class particles : CanvasLayer
 		};
 	}
 
-	/// <summary>
-	/// Crée le système de poussière d'étoiles scintillantes du tracé de dessin.
-	/// </summary>
 	private GpuParticles2D CreateTrailSparkleParticleSystem(BodyPalette palette)
 	{
 		var gradient = new Gradient();
