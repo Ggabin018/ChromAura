@@ -176,3 +176,39 @@ stretch_mode = 5
 
 [node name="AudioManager" type="Node" parent="Control" unique_id=2007512884]
 script = ExtResource("5_audio")
+
+[node name="RgbDebugLayer" type="CanvasLayer" parent="Control"]
+layer = 100
+visible = false
+
+[node name="Background" type="ColorRect" parent="Control/RgbDebugLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="CameraView" type="TextureRect" parent="Control/RgbDebugLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Hint" type="Label" parent="Control/RgbDebugLayer"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 430.0
+offset_bottom = 52.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 20
+text = "Flux RGB MediaPipe — R pour revenir"
