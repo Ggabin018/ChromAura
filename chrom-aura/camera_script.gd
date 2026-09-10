@@ -8,11 +8,9 @@ extends Control
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
 @export_group("Kamehameha")
-@export_range(0.5, 4.0, 0.05) var kamehameha_join_distance_palms := 1.75
-@export_range(50, 1000, 10) var kamehameha_charge_ms := 220
-@export_range(50, 800, 10) var kamehameha_release_grace_ms := 180
-@export_range(0.0, 1.0, 0.05) var kamehameha_same_motion_dot := 0.55
-@export_range(0.0, 3.0, 0.05) var kamehameha_motion_threshold := 0.08
+@export_range(0.5, 4.0, 0.05) var kamehameha_final_join_distance_palms := 2.10
+@export_range(0.10, 0.45, 0.01) var kamehameha_side_zone_x := 0.34
+# Pose statique : deux mains ouvertes suffisent pour activer l'effet.
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
@@ -239,7 +237,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		if gesture_status_label.visible:
 			var messages: Array[String] = []
 			if bool(kamehameha.get("active", false)):
-				messages.append("KAMEHAMEHA (%.0f%%)" % [float(kamehameha.get("strength", 0.0)) * 100.0])
+				messages.append("KAMEHAMEHA FINAL SIDE (%.0f%%)" % [float(kamehameha.get("strength", 0.0)) * 100.0])
 			for detection in detections:
 				messages.append(
 					"#%d %s (%.0f%%)"
@@ -250,7 +248,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		gesture_status_label.visible = false
 
 
-func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary:
+func _update_kamehameha(poses: Array[HandPose], _timestamp_ms: int) -> Dictionary:
 	var result := {
 		"active": false,
 		"left": Vector2.ZERO,
@@ -258,19 +256,27 @@ func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary
 		"anchor": Vector2.ZERO,
 		"strength": 0.0,
 	}
-	if poses.size() < 2:
-		_update_kamehameha_release(timestamp_ms)
+
+	# Version finale laterale : aucun mouvement n'est demande.
+	# Le Kamehameha s'active si deux mains ouvertes forment la pose finale
+	# et si cette pose est clairement situee sur le cote gauche ou droit de l'image.
+	var open_hands: Array[HandPose] = []
+	for pose in poses:
+		if pose != null and _is_open_hand(pose):
+			open_hands.append(pose)
+
+	if open_hands.size() < 2:
+		_kamehameha_active = false
 		return result
 
-	var best_a: HandPose = null
-	var best_b: HandPose = null
-	var best_normalized_distance := INF
-	for i in range(poses.size() - 1):
-		for j in range(i + 1, poses.size()):
-			var a := poses[i]
-			var b := poses[j]
-			if a == null or b == null:
-				continue
+	# On choisit de preference une paire gauche + droite quand possible.
+	var hand_a: HandPose = null
+	var hand_b: HandPose = null
+	var best_distance := INF
+	for i in range(open_hands.size() - 1):
+		for j in range(i + 1, open_hands.size()):
+			var a := open_hands[i]
+			var b := open_hands[j]
 			if (
 				a.handedness != HandPose.UNKNOWN_HAND
 				and b.handedness != HandPose.UNKNOWN_HAND
@@ -279,59 +285,101 @@ func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary
 				continue
 			var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
 			var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
-			if normalized_distance < best_normalized_distance:
-				best_normalized_distance = normalized_distance
-				best_a = a
-				best_b = b
+			if normalized_distance < best_distance:
+				best_distance = normalized_distance
+				hand_a = a
+				hand_b = b
 
-	if best_a == null or best_b == null or best_normalized_distance > kamehameha_join_distance_palms:
-		_update_kamehameha_release(timestamp_ms)
+	if hand_a == null or hand_b == null:
+		# Fallback : prendre les deux mains ouvertes les plus proches.
+		for i in range(open_hands.size() - 1):
+			for j in range(i + 1, open_hands.size()):
+				var a := open_hands[i]
+				var b := open_hands[j]
+				var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
+				var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
+				if normalized_distance < best_distance:
+					best_distance = normalized_distance
+					hand_a = a
+					hand_b = b
+
+	if hand_a == null or hand_b == null:
+		_kamehameha_active = false
 		return result
 
-	var ids := Vector2i(mini(best_a.track_id, best_b.track_id), maxi(best_a.track_id, best_b.track_id))
-	if ids != _kamehameha_pair_ids:
-		_kamehameha_pair_ids = ids
-		_kamehameha_candidate_since_ms = timestamp_ms
+	var left_hand := hand_a
+	var right_hand := hand_b
+	if hand_a.handedness == &"RIGHT" and hand_b.handedness == &"LEFT":
+		left_hand = hand_b
+		right_hand = hand_a
+	elif hand_a.handedness == HandPose.UNKNOWN_HAND or hand_b.handedness == HandPose.UNKNOWN_HAND:
+		if hand_a.palm_center_uv.x > hand_b.palm_center_uv.x:
+			left_hand = hand_b
+			right_hand = hand_a
+
+	var center := (left_hand.palm_center_uv + right_hand.palm_center_uv) * 0.5
+	var average_scale := maxf((left_hand.palm_scale_uv + right_hand.palm_scale_uv) * 0.5, 0.02)
+	var normalized_distance := left_hand.palm_center_uv.distance_to(right_hand.palm_center_uv) / average_scale
+	var on_left_side := center.x <= kamehameha_side_zone_x
+	var on_right_side := center.x >= 1.0 - kamehameha_side_zone_x
+	var in_side_zone := on_left_side or on_right_side
+	var hands_grouped := normalized_distance <= kamehameha_final_join_distance_palms
+
+	if not in_side_zone or not hands_grouped:
 		_kamehameha_active = false
+		return result
 
-	_kamehameha_last_joined_ms = timestamp_ms
-	if _kamehameha_candidate_since_ms < 0:
-		_kamehameha_candidate_since_ms = timestamp_ms
-	if not _kamehameha_active and timestamp_ms - _kamehameha_candidate_since_ms >= kamehameha_charge_ms:
-		_kamehameha_active = true
-
-	var velocity_a := best_a.velocity_uv
-	var velocity_b := best_b.velocity_uv
-	var speed_a := velocity_a.length()
-	var speed_b := velocity_b.length()
-	var same_motion := 1.0
-	if speed_a > kamehameha_motion_threshold and speed_b > kamehameha_motion_threshold:
-		same_motion = clampf(velocity_a.normalized().dot(velocity_b.normalized()), -1.0, 1.0)
-		if same_motion < kamehameha_same_motion_dot:
-			_kamehameha_active = false
-			_kamehameha_candidate_since_ms = timestamp_ms
-
-	var center := (best_a.palm_center_uv + best_b.palm_center_uv) * 0.5
-	var average_speed := (speed_a + speed_b) * 0.5
-	var charge_progress := clampf(float(timestamp_ms - _kamehameha_candidate_since_ms) / maxf(float(kamehameha_charge_ms), 1.0), 0.0, 1.0)
-	var motion_strength := clampf(average_speed / 0.65, 0.0, 1.0)
-	var strength := clampf(maxf(charge_progress * 0.65, motion_strength), 0.0, 1.0)
-
-	result["active"] = _kamehameha_active
-	result["left"] = best_a.palm_center_uv
-	result["right"] = best_b.palm_center_uv
+	_kamehameha_active = true
+	result["active"] = true
+	result["left"] = left_hand.palm_center_uv
+	result["right"] = right_hand.palm_center_uv
 	result["anchor"] = center
-	result["strength"] = strength
+	result["strength"] = 1.0
 	return result
 
 
-func _update_kamehameha_release(timestamp_ms: int) -> void:
-	if _kamehameha_last_joined_ms >= 0 and timestamp_ms - _kamehameha_last_joined_ms < kamehameha_release_grace_ms:
-		return
-	_kamehameha_active = false
-	_kamehameha_candidate_since_ms = -1
-	_kamehameha_last_joined_ms = -1
-	_kamehameha_pair_ids = Vector2i(-1, -1)
+func _is_open_hand(pose: HandPose) -> bool:
+	# MediaPipe fournit 21 landmarks. On demande seulement que la main soit clairement ouverte :
+	# au moins 3 des 4 grands doigts doivent etre droits et deployes.
+	if pose.landmarks_2d.size() < 21:
+		return false
+
+	var points := pose.landmarks_2d
+	var palm := pose.palm_center_uv
+	var scale := maxf(pose.palm_scale_uv, 0.001)
+	var extended_count := 0
+
+	var fingers := [
+		[5, 6, 7, 8],   # index
+		[9, 10, 11, 12], # majeur
+		[13, 14, 15, 16], # annulaire
+		[17, 18, 19, 20], # auriculaire
+	]
+
+	for finger in fingers:
+		var mcp: Vector2 = points[finger[0]]
+		var pip: Vector2 = points[finger[1]]
+		var dip: Vector2 = points[finger[2]]
+		var tip: Vector2 = points[finger[3]]
+
+		var pip_angle := _joint_angle_degrees(mcp, pip, dip)
+		var dip_angle := _joint_angle_degrees(pip, dip, tip)
+		var tip_reach := tip.distance_to(palm) / scale
+		var pip_reach := pip.distance_to(palm) / scale
+
+		# Seuils volontairement permissifs pour rendre le geste facile a declencher.
+		if pip_angle >= 135.0 and dip_angle >= 135.0 and tip_reach > pip_reach + 0.18:
+			extended_count += 1
+
+	return extended_count >= 3
+
+
+func _joint_angle_degrees(a: Vector2, b: Vector2, c: Vector2) -> float:
+	var ba := a - b
+	var bc := c - b
+	if ba.length_squared() < 0.0000001 or bc.length_squared() < 0.0000001:
+		return 0.0
+	return rad_to_deg(ba.angle_to(bc))
 
 
 func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:
