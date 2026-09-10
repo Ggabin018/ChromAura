@@ -64,9 +64,6 @@ color = Color(0, 0, 0, 1)
 
 [node name="Particles" type="CanvasLayer" parent="Control" unique_id=695156268]
 script = ExtResource("2_particles")
-ParticlesPerSecond = 100000
-MaxMistParticles = 150000
-MaxSparkleParticles = 120000
 
 [node name="HandGestureEngine" type="Node" parent="Control" unique_id=1427992933]
 script = ExtResource("7_gesture_engine")

@@ -1,4 +1,3 @@
-class_name AudioManager
 extends Node
 
 ## AudioManager for ChromAura
@@ -11,10 +10,14 @@ extends Node
 	"res://assets/audio/ambient_2.mp3"
 ]
 @export var glitter_track_path: String = "res://assets/audio/glitter.mp3"
+@export var wilhelm_track_path: String = "res://assets/audio/wilhelm_scream.mp3"
+@export var shot_track_path: String = "res://assets/audio/Water_drop_trimmed.wav"
 
 @export_group("Volumes (dB)")
 @export_range(-80.0, 6.0, 0.5) var ambient_volume_db: float = -8.0
 @export_range(-80.0, 6.0, 0.5) var glitter_volume_db: float = -2.0
+@export_range(-80.0, 6.0, 0.5) var wilhelm_volume_db: float = 0.0
+@export_range(-80.0, 6.0, 0.5) var shot_volume_db: float = -2.0
 
 @export_group("Transitions")
 ## Durée du crossfade entre deux musiques d'ambiance (en secondes)
@@ -42,8 +45,12 @@ var _last_pointing_time_ms: int = 0
 var _stop_drawing_time_ms: int = 0
 
 var _shot_players: Array[AudioStreamPlayer] = []
-var _shot_stream: AudioStreamWAV = null
+var _shot_stream: AudioStream = null
 var _shot_player_index: int = 0
+
+var _wilhelm_player: AudioStreamPlayer
+var _wilhelm_stream: AudioStream
+var _last_wilhelm_time_ms: int = -999999
 
 
 func _ready() -> void:
@@ -70,33 +77,39 @@ func _setup_audio_players() -> void:
 	add_child(_glitter_player)
 
 	_shot_stream = _create_shot_stream()
-	for i in range(4):
+	for i in range(12):
 		var sp := AudioStreamPlayer.new()
 		sp.name = "ShotPlayer%d" % i
 		sp.bus = "Master"
-		sp.volume_db = -2.0
+		sp.volume_db = shot_volume_db
 		sp.stream = _shot_stream
 		add_child(sp)
 		_shot_players.append(sp)
 
+	_wilhelm_player = AudioStreamPlayer.new()
+	_wilhelm_player.name = "WilhelmPlayer"
+	_wilhelm_player.bus = "Master"
+	_wilhelm_player.volume_db = wilhelm_volume_db
+	add_child(_wilhelm_player)
+
 
 func _create_shot_stream() -> AudioStreamWAV:
 	var sample_rate := 22050
-	var duration := 0.22
+	var duration := 0.16
 	var total_samples := int(sample_rate * duration)
 	var data := PackedByteArray()
-	data.resize(total_samples)
+	data.resize(total_samples * 2)
 	var phase := 0.0
 	for i in range(total_samples):
 		var t := float(i) / float(total_samples)
-		var freq := lerpf(1250.0, 160.0, t * t)
+		var freq := 420.0 + 680.0 * (1.0 - exp(-30.0 * t))
 		phase += freq / float(sample_rate) * TAU
-		var env := exp(-8.5 * t)
-		var sample := (sin(phase) + 0.35 * sin(phase * 2.0)) * env
-		var byte_val := clampi(int((sample * 0.85 + 1.0) * 127.5), 0, 255)
-		data[i] = byte_val
+		var env := sin(clampf(t * 14.0, 0.0, 1.0) * PI * 0.5) * exp(-16.0 * t)
+		var sample := sin(phase) * env
+		var s16 := clampi(int(sample * 24000.0), -32768, 32767)
+		data.encode_s16(i * 2, s16)
 	var wav := AudioStreamWAV.new()
-	wav.format = AudioStreamWAV.FORMAT_8_BITS
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = sample_rate
 	wav.stereo = false
 	wav.data = data
@@ -108,8 +121,21 @@ func play_gun_shot() -> void:
 		return
 	var player := _shot_players[_shot_player_index]
 	_shot_player_index = (_shot_player_index + 1) % _shot_players.size()
-	player.pitch_scale = randf_range(0.92, 1.10)
+	player.volume_db = shot_volume_db + randf_range(-1.5, 1.0)
+	player.pitch_scale = randf_range(0.85, 1.30)
 	player.play(0.0)
+
+
+func play_wilhelm_scream() -> void:
+	if not is_inside_tree() or not is_instance_valid(_wilhelm_player) or _wilhelm_stream == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_wilhelm_time_ms < 150:
+		return
+	_last_wilhelm_time_ms = now
+	_wilhelm_player.volume_db = wilhelm_volume_db
+	_wilhelm_player.pitch_scale = randf_range(0.98, 1.02)
+	_wilhelm_player.play(0.0)
 
 
 func _load_stream(path: String, loop: bool) -> AudioStream:
@@ -123,10 +149,14 @@ func _load_stream(path: String, loop: bool) -> AudioStream:
 	if stream == null:
 		var file := FileAccess.open(path, FileAccess.READ)
 		if file != null:
-			var mp3 := AudioStreamMP3.new()
-			mp3.data = file.get_buffer(file.get_length())
-			mp3.loop = loop
-			stream = mp3
+			var buffer := file.get_buffer(file.get_length())
+			if path.to_lower().ends_with(".mp3"):
+				var mp3 := AudioStreamMP3.new()
+				mp3.data = buffer
+				mp3.loop = loop
+				stream = mp3
+			elif path.to_lower().ends_with(".wav"):
+				stream = _load_wav_from_buffer(buffer, loop)
 		else:
 			push_error("AudioManager: Impossible d'ouvrir le fichier audio : %s" % path)
 	elif stream is AudioStreamMP3:
@@ -135,6 +165,38 @@ func _load_stream(path: String, loop: bool) -> AudioStream:
 		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
 
 	return stream
+
+
+func _load_wav_from_buffer(buffer: PackedByteArray, loop: bool) -> AudioStreamWAV:
+	if buffer.size() < 44:
+		return null
+	var riff := buffer.slice(0, 4).get_string_from_ascii()
+	var wave := buffer.slice(8, 12).get_string_from_ascii()
+	if riff != "RIFF" or wave != "WAVE":
+		return null
+
+	var channels := buffer.decode_u16(22)
+	var sample_rate := buffer.decode_u32(24)
+	var bits_per_sample := buffer.decode_u16(34)
+
+	var data_offset := 12
+	while data_offset < buffer.size() - 8:
+		var chunk_id := buffer.slice(data_offset, data_offset + 4).get_string_from_ascii()
+		var chunk_size := buffer.decode_u32(data_offset + 4)
+		if chunk_id == "data":
+			var audio_data := buffer.slice(data_offset + 8, data_offset + 8 + chunk_size)
+			var wav := AudioStreamWAV.new()
+			wav.data = audio_data
+			wav.mix_rate = int(sample_rate)
+			wav.stereo = (channels == 2)
+			if bits_per_sample == 8:
+				wav.format = AudioStreamWAV.FORMAT_8_BITS
+			elif bits_per_sample == 16:
+				wav.format = AudioStreamWAV.FORMAT_16_BITS
+			wav.loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
+			return wav
+		data_offset += 8 + chunk_size
+	return null
 
 
 func _load_audio_resources() -> void:
@@ -147,6 +209,19 @@ func _load_audio_resources() -> void:
 	_glitter_stream = _load_stream(glitter_track_path, true)
 	if is_instance_valid(_glitter_player) and _glitter_stream != null:
 		_glitter_player.stream = _glitter_stream
+
+	_wilhelm_stream = _load_stream(wilhelm_track_path, false)
+	if is_instance_valid(_wilhelm_player) and _wilhelm_stream != null:
+		_wilhelm_player.stream = _wilhelm_stream
+
+	var loaded_shot := _load_stream(shot_track_path, false)
+	if loaded_shot == null and shot_track_path != "res://assets/audio/Water_drop.mp3":
+		loaded_shot = _load_stream("res://assets/audio/Water_drop.mp3", false)
+	if loaded_shot != null:
+		_shot_stream = loaded_shot
+		for sp in _shot_players:
+			if is_instance_valid(sp):
+				sp.stream = _shot_stream
 
 
 func start_ambient() -> void:

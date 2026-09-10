@@ -2,9 +2,9 @@ extends Control
 
 @export_file("*.task") var model_path := "res://assets/models/hand_landmarker.task"
 @export_range(1, 8, 1) var max_hands := 4
-@export_range(0.0, 1.0, 0.05) var hand_detection_confidence := 0.5
-@export_range(0.0, 1.0, 0.05) var hand_presence_confidence := 0.5
-@export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.5
+@export_range(0.0, 1.0, 0.05) var hand_detection_confidence := 0.40
+@export_range(0.0, 1.0, 0.05) var hand_presence_confidence := 0.40
+@export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.40
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
@@ -33,6 +33,10 @@ var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
+var _track_thumb_up_times: Dictionary[int, int] = {}
+var _last_global_thumb_up_time_ms: int = -999999
+var _last_wilhelm_easter_egg_ms: int = -999999
+var _wilhelm_easter_egg_active_until_ms: int = -1
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -54,7 +58,11 @@ func _ready() -> void:
 	if is_instance_valid(body_status_label):
 		body_status_label.visible = false
 	gesture_status_label.visible = false
-	set_process_input(true)
+	if is_instance_valid(gesture_engine):
+		gesture_engine.activation_threshold = 0.65
+		gesture_engine.maintenance_threshold = 0.45
+		gesture_engine.activation_delay_ms = 60
+		gesture_engine.release_delay_ms = 250
 
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
@@ -180,16 +188,32 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	var pointing_fingers: Array[Vector2] = []
 	var gun_detections: Array[Dictionary] = []
 	for detection in detections:
-		if detection.gesture == HandGestureEngine.INDEX_POINTING:
-			pointing_fingers.append(detection.anchor_uv)
-		elif detection.gesture == HandGestureEngine.FINGER_GUN:
+		if detection.gesture == HandGestureEngine.FINGER_GUN:
 			gun_detections.append({
 				"track_id": detection.track_id,
 				"anchor": detection.anchor_uv,
 				"direction": detection.direction_uv,
 			})
+			_track_thumb_up_times.erase(detection.track_id)
+			_last_global_thumb_up_time_ms = -999999
 		elif detection.gesture == HandGestureEngine.INDEX_MIDDLE_POINTING:
-			if absf(detection.direction_uv.x) >= 0.40:
+			gun_detections.append({
+				"track_id": detection.track_id,
+				"anchor": detection.anchor_uv,
+				"direction": detection.direction_uv,
+			})
+			_track_thumb_up_times.erase(detection.track_id)
+			_last_global_thumb_up_time_ms = -999999
+		elif detection.gesture == HandGestureEngine.INDEX_POINTING:
+			var is_gun_thumb := false
+			for pose in gesture_engine.get_hand_poses():
+				if pose.track_id == detection.track_id:
+					if pose.landmarks_2d.size() > 4:
+						var thumb_vec: Vector2 = pose.landmarks_2d[4] - pose.landmarks_2d[2]
+						if thumb_vec.y < -0.03 and thumb_vec.length() > 0.04:
+							is_gun_thumb = true
+					break
+			if is_gun_thumb:
 				gun_detections.append({
 					"track_id": detection.track_id,
 					"anchor": detection.anchor_uv,
@@ -197,6 +221,61 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 				})
 			else:
 				pointing_fingers.append(detection.anchor_uv)
+			_track_thumb_up_times.erase(detection.track_id)
+			_last_global_thumb_up_time_ms = -999999
+		elif detection.gesture == HandGestureEngine.THUMB_UP:
+			if gun_detections.is_empty() and pointing_fingers.is_empty():
+				_track_thumb_up_times[detection.track_id] = timestamp_ms
+				_last_global_thumb_up_time_ms = timestamp_ms
+		elif detection.gesture == HandGestureEngine.THUMB_DOWN:
+			if gun_detections.is_empty() and pointing_fingers.is_empty():
+				var has_track_up := (
+					_track_thumb_up_times.has(detection.track_id)
+					and (timestamp_ms - _track_thumb_up_times[detection.track_id]) >= 200
+					and (timestamp_ms - _track_thumb_up_times[detection.track_id]) <= 3000
+				)
+				var has_global_up := (
+					(timestamp_ms - _last_global_thumb_up_time_ms) >= 200
+					and (timestamp_ms - _last_global_thumb_up_time_ms) <= 3000
+				)
+				var is_gladiator_flip := has_track_up or has_global_up
+
+				if is_gladiator_flip:
+					_trigger_wilhelm_easter_egg(detection.track_id, detection.anchor_uv, timestamp_ms)
+
+	# Détection réactive instantanée depuis les poses brutes (capture les flips rapides sans délai)
+	for pose in gesture_engine.get_hand_poses():
+		var scores := gesture_engine.classify_pose(pose)
+		var gun_s: float = scores.get(HandGestureEngine.FINGER_GUN, 0.0)
+		var p1_s: float = scores.get(HandGestureEngine.INDEX_POINTING, 0.0)
+		var p2_s: float = scores.get(HandGestureEngine.INDEX_MIDDLE_POINTING, 0.0)
+		if gun_s >= 0.20 or p1_s >= 0.25 or p2_s >= 0.25:
+			_track_thumb_up_times.erase(pose.track_id)
+			_last_global_thumb_up_time_ms = -999999
+			continue
+
+		if not gun_detections.is_empty() or not pointing_fingers.is_empty():
+			continue
+
+		var up_score: float = scores.get(HandGestureEngine.THUMB_UP, 0.0)
+		var down_score: float = scores.get(HandGestureEngine.THUMB_DOWN, 0.0)
+		if up_score >= 0.55:
+			_track_thumb_up_times[pose.track_id] = timestamp_ms
+			_last_global_thumb_up_time_ms = timestamp_ms
+		elif down_score >= 0.55:
+			var has_track_up := (
+				_track_thumb_up_times.has(pose.track_id)
+				and (timestamp_ms - _track_thumb_up_times[pose.track_id]) >= 200
+				and (timestamp_ms - _track_thumb_up_times[pose.track_id]) <= 3000
+			)
+			var has_global_up := (
+				(timestamp_ms - _last_global_thumb_up_time_ms) >= 200
+				and (timestamp_ms - _last_global_thumb_up_time_ms) <= 3000
+			)
+			if has_track_up or has_global_up:
+				var anchor_uv := pose.landmarks_2d[HandGestureEngine.THUMB_TIP] if pose.landmarks_2d.size() > HandGestureEngine.THUMB_TIP else pose.palm_center_uv
+				_trigger_wilhelm_easter_egg(pose.track_id, anchor_uv, timestamp_ms)
+
 	var is_pointing := not pointing_fingers.is_empty()
 
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
@@ -212,22 +291,38 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 	if dev_mode_toggled:
 		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
-		gesture_status_label.visible = not detections.is_empty()
+		var is_easter_egg_active := timestamp_ms < _wilhelm_easter_egg_active_until_ms
+		gesture_status_label.visible = not detections.is_empty() or is_easter_egg_active
 		if gesture_status_label.visible:
 			var messages: Array[String] = []
+			if is_easter_egg_active:
+				messages.append("WILHELM SCREAM!")
 			for detection in detections:
 				messages.append(
 					"#%d %s (%.0f%%)"
 					% [detection.track_id, detection.gesture, detection.score * 100.0]
 				)
 			gesture_status_label.text = "  |  ".join(messages)
-	else:
+	elif is_instance_valid(gesture_status_label):
 		gesture_status_label.visible = false
 
 
 func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:
 	if is_instance_valid(audio_manager) and audio_manager.has_method("play_gun_shot"):
 		audio_manager.play_gun_shot()
+
+
+func _trigger_wilhelm_easter_egg(track_id: int, anchor_uv: Vector2, timestamp_ms: int) -> void:
+	_last_wilhelm_easter_egg_ms = timestamp_ms
+	_wilhelm_easter_egg_active_until_ms = timestamp_ms + 2500
+	_track_thumb_up_times.erase(track_id)
+	_last_global_thumb_up_time_ms = -999999
+
+	if is_instance_valid(audio_manager) and audio_manager.has_method("play_wilhelm_scream"):
+		audio_manager.play_wilhelm_scream()
+
+	if is_instance_valid(particles_layer) and particles_layer.has_method("EmitWilhelmEasterEgg"):
+		particles_layer.EmitWilhelmEasterEgg(anchor_uv)
 
 
 func _update_draw_instruction(is_pointing: bool) -> void:

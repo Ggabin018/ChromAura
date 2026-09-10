@@ -16,6 +16,7 @@ signal hand_lost(track_id: int)
 const INDEX_POINTING: StringName = &"INDEX_POINTING"
 const INDEX_MIDDLE_POINTING: StringName = &"INDEX_MIDDLE_POINTING"
 const THUMB_UP: StringName = &"THUMB_UP"
+const THUMB_DOWN: StringName = &"THUMB_DOWN"
 const FINGER_GUN: StringName = &"FINGER_GUN"
 
 const WRIST := 0
@@ -46,9 +47,9 @@ const HANDEDNESS_MISMATCH_COST := 0.75
 const MIN_PALM_SCALE_UV := 0.02
 
 @export_group("Gesture Hysteresis")
-@export_range(0.0, 1.0, 0.01) var activation_threshold := 0.78
-@export_range(0.0, 1.0, 0.01) var maintenance_threshold := 0.60
-@export_range(0, 1000, 10) var activation_delay_ms := 120
+@export_range(0.0, 1.0, 0.01) var activation_threshold := 0.74
+@export_range(0.0, 1.0, 0.01) var maintenance_threshold := 0.56
+@export_range(0, 1000, 10) var activation_delay_ms := 100
 @export_range(0, 1000, 10) var release_delay_ms := 180
 @export_range(0.0, 0.5, 0.01) var switch_margin := 0.08
 
@@ -187,22 +188,17 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	)
 	var non_index_folded := minf(middle_folded, minf(ring_folded, pinky_folded))
 	var pointing_score := 0.55 * index_extended + 0.45 * non_index_folded
+	if index_extended < 0.35:
+		pointing_score = 0.0
 	var two_finger_extension := minf(index_extended, middle_extended)
 	var remaining_fingers_folded := minf(ring_folded, pinky_folded)
 	var two_finger_pointing_score := (
 		0.65 * two_finger_extension + 0.35 * remaining_fingers_folded
 	)
+	if two_finger_extension < 0.35:
+		two_finger_pointing_score = 0.0
 
 	var thumb_extended := _thumb_extended_score(landmarks)
-	var index_folded := _finger_folded_score(
-		landmarks, INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP
-	)
-	var all_fingers_folded := minf(index_folded, non_index_folded)
-	var thumb_direction := (pose.landmarks_2d[THUMB_TIP] - pose.landmarks_2d[THUMB_IP]).normalized()
-	var upward_alignment := thumb_direction.dot(Vector2.UP)
-	var upward_score := _smoothstep(cos(deg_to_rad(55.0)), cos(deg_to_rad(35.0)), upward_alignment)
-	var thumb_shape_score := 0.50 * thumb_extended + 0.50 * all_fingers_folded
-	var thumb_up_score := thumb_shape_score * (0.45 + 0.55 * upward_score)
 
 	# Finger Gun requires INDEX and MIDDLE fingers extended (Index Middle Pointing gun)
 	var two_finger_gun_extension := minf(index_extended, middle_extended)
@@ -238,6 +234,42 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	)
 	finger_gun_score = clampf(finger_gun_score, 0.0, 1.0)
 
+	var index_folded := _finger_folded_score(
+		landmarks, INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP
+	)
+	var all_fingers_folded := minf(index_folded, non_index_folded)
+	var thumb_delta_mcp: Vector2 = pose.landmarks_2d[THUMB_TIP] - pose.landmarks_2d[THUMB_MCP]
+	var thumb_delta_ip: Vector2 = pose.landmarks_2d[THUMB_TIP] - pose.landmarks_2d[THUMB_IP]
+	var thumb_dir_combined: Vector2 = thumb_delta_mcp + thumb_delta_ip
+	var thumb_direction: Vector2 = thumb_dir_combined.normalized() if not thumb_dir_combined.is_zero_approx() else Vector2.UP
+	var upward_alignment := thumb_direction.dot(Vector2.UP)
+	var upward_score := _smoothstep(cos(deg_to_rad(70.0)), cos(deg_to_rad(30.0)), upward_alignment)
+	var downward_alignment := thumb_direction.dot(Vector2.DOWN)
+	var downward_score := _smoothstep(cos(deg_to_rad(75.0)), cos(deg_to_rad(35.0)), downward_alignment)
+
+	var thumb_shape_score := 0.45 * thumb_extended + 0.55 * all_fingers_folded
+	# Strictly enforce closed fist for thumbs up / thumbs down:
+	# If index or middle finger is extended, or non-thumb fingers are not folded,
+	# or gun / pointing is detected, thumb up/down MUST BE ZERO.
+	if (
+		index_extended > 0.25
+		or middle_extended > 0.25
+		or all_fingers_folded < 0.40
+		or thumb_extended < 0.40
+		or finger_gun_score > 0.20
+		or pointing_score > 0.30
+		or two_finger_pointing_score > 0.30
+	):
+		thumb_shape_score = 0.0
+
+	var thumb_up_score := thumb_shape_score * (0.45 + 0.55 * upward_score)
+	if upward_alignment <= 0.15:
+		thumb_up_score = 0.0
+
+	var thumb_down_score := thumb_shape_score * (0.45 + 0.55 * downward_score)
+	if downward_alignment <= 0.15:
+		thumb_down_score = 0.0
+
 	if finger_gun_score >= 0.70:
 		two_finger_pointing_score = minf(two_finger_pointing_score, finger_gun_score - 0.10)
 
@@ -245,6 +277,7 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 		INDEX_POINTING: clampf(pointing_score, 0.0, 1.0),
 		INDEX_MIDDLE_POINTING: clampf(two_finger_pointing_score, 0.0, 1.0),
 		THUMB_UP: clampf(thumb_up_score, 0.0, 1.0),
+		THUMB_DOWN: clampf(thumb_down_score, 0.0, 1.0),
 		FINGER_GUN: clampf(finger_gun_score, 0.0, 1.0),
 	}
 
@@ -495,7 +528,7 @@ func _make_detection(
 			track.pose.landmarks_2d[MIDDLE_TIP] - track.pose.landmarks_2d[MIDDLE_DIP]
 		).normalized()
 		direction = (index_direction + middle_direction).normalized()
-	elif gesture == THUMB_UP:
+	elif gesture == THUMB_UP or gesture == THUMB_DOWN:
 		anchor = track.pose.landmarks_2d[THUMB_TIP]
 		direction = (anchor - track.pose.landmarks_2d[THUMB_IP]).normalized()
 	elif gesture == FINGER_GUN:
