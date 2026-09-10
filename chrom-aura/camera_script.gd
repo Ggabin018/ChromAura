@@ -1,7 +1,7 @@
 extends Control
 
 @export_file("*.task") var model_path := "res://assets/models/hand_landmarker.task"
-@export_range(1, 8, 1) var max_hands := 2
+@export_range(1, 8, 1) var max_hands := 4
 @export_range(0.0, 1.0, 0.05) var hand_detection_confidence := 0.4
 @export_range(0.0, 1.0, 0.05) var hand_presence_confidence := 0.6
 @export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.6
