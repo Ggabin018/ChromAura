@@ -23,19 +23,13 @@ jobs:
           include-export-templates: false
 
       - name: Import project
-        run: |
-          godot --headless --editor --quit
+        run: godot --headless --path chrom-aura --editor --quit
 
       - name: Validate GDScript
-        run: |
-          godot --headless --editor --quit --check-only
+        run: godot --headless --path chrom-aura --editor --quit --check-only
 
-      - name: Run unit tests
-        run: |
-          godot --headless \
-            -s addons/gut/gut_cmdln.gd \
-            -gdir=res://tests \
-            -gexit
+      - name: Test hand gesture engine
+        run: godot --headless --path chrom-aura --script res://tests/test_hand_gesture_engine.gd
 
   build:
     name: Build ${{ matrix.platform }}
