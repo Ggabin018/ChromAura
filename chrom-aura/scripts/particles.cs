@@ -19,6 +19,26 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsque l'easter egg du cri de Wilhelm est déclenché.</summary>
 	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
 
+	[ExportGroup("Traînée multicolore")]
+	[Export(PropertyHint.Range, "0.1,3,0.05")] public float OutwardLifetime { get; set; } = 1.25f;
+	[Export] public int OutwardParticlesPerSecond { get; set; } = 8000;
+	[Export] public int MaxOutwardParticles { get; set; } = 18000;
+	// Initial fall speed. It is depth-linked and shared by every body sample.
+	[Export] public float OutwardSpeed { get; set; } = 8.0f;
+	[Export] public float OutwardSize { get; set; } = 100.0f;
+	[Export] public float OutwardGravity { get; set; } = 75.0f;
+	[Export(PropertyHint.Range, "0,10,0.1")] public float OutwardDamping { get; set; } = 10.0f;
+	// Optical density, not RGB amplification: zero hides smoke without whitening its colors.
+	[Export(PropertyHint.Range, "0,4,0.05,or_greater")] public float OutwardIntensity { get; set; } = 1.0f;
+	// These settings also update the live material in the Remote Inspector.
+	[Export] public bool OutwardTurbulenceEnabled { get; set; } = true;
+	[Export(PropertyHint.Range, "0,1,0.01")] public float OutwardTurbulenceInfluence { get; set; } = 0.16f;
+	// Godot's scale is nonlinear: 6 produces pixel-sized noise in 2D; 9.8 gives broad curls.
+	[Export(PropertyHint.Range, "0,9.99,0.01")] public float OutwardTurbulenceScale { get; set; } = 8.0f;
+	[Export(PropertyHint.Range, "0,1,0.01")] public float OutwardTurbulenceEvolution { get; set; } = 0.15f;
+	[Export] public float DepthFarThreshold { get; set; } = 0.67f;
+	[Export] public float DepthNearThreshold { get; set; } = 0.88f;
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
@@ -159,9 +179,38 @@ public partial class particles : CanvasLayer
 	/// <summary>Accès en lecture seule à la liste des corps suivis.</summary>
 	public IReadOnlyList<TrackedBody> TrackedBodies => _bodyDetector.TrackedBodies;
 
+	/// <summary>Nombre de zones libérées en attente d'émission (test/debug).</summary>
+	public int PendingReleasedTrailCount => _releasedTrailSamples.Count;
+
 	// =========================================================================
 	// ÉTAT INTERNE
 	// =========================================================================
+
+	private GpuParticles2D _outwardParticleSystem = null!;
+	private float _outwardEmissionRemainder;
+	private float _meanBodyDepth;
+	private float _meanReleasedDepth;
+	private readonly Queue<ReleasedMaskSample> _releasedTrailSamples = new();
+	private readonly List<ReleasedMaskSample> _releasedTrailBatch = new();
+	private bool[] _previousMaskActive = Array.Empty<bool>();
+	private bool[] _confirmedMaskActive = Array.Empty<bool>();
+	private float[] _previousMaskDepth = Array.Empty<float>();
+	private int _releaseGridWidth;
+	private int _releaseGridHeight;
+	private int _releaseGridStride;
+	private bool[] _previousDemoActive = Array.Empty<bool>();
+	private bool[] _confirmedDemoActive = Array.Empty<bool>();
+	private float[] _previousDemoDepth = Array.Empty<float>();
+	private bool[] _currentDemoActive = Array.Empty<bool>();
+	private float[] _currentDemoDepth = Array.Empty<float>();
+	private Vector2I _demoReleaseGridSize;
+	private Transform2D _maskToScreen = Transform2D.Identity;
+	private Transform2D _bodyToScreen = Transform2D.Identity;
+	private OutwardSettings? _appliedOutwardSettings;
+	private bool _demoBodyEnabled;
+	private float _demoBodyOffsetX;
+	private float _demoBodyScale = 1.0f;
+	private float _demoBodyDepth;
 
 	private readonly BodyDetector _bodyDetector = new();
 	private readonly List<MaskSample> _maskPoints = new();
@@ -204,6 +253,10 @@ public partial class particles : CanvasLayer
 	public override void _Ready()
 	{
 		_random.Randomize();
+		_outwardParticleSystem = CreateOutwardParticleSystem();
+		AddChild(_outwardParticleSystem);
+		ApplyOutwardSettings();
+		UpdateMaskMapping();
 
 		// Le premier enfant du CanvasLayer reste derrière toutes les particules corporelles.
 		_ambientFireflies = new AmbientFireflies
@@ -261,6 +314,19 @@ public partial class particles : CanvasLayer
 
 	public override void _Process(double delta)
 	{
+		ApplyOutwardSettings();
+		UpdateMaskMapping();
+		// A released region keeps its last depth while it drains from the queue.
+		var intensityDepth = _releasedTrailSamples.Count > 0 ? _meanReleasedDepth
+			: (_demoBodyEnabled ? _demoBodyDepth : _meanBodyDepth);
+		var closeness = GetCloseness(intensityDepth);
+		// Keep the distant look unchanged, but compress the near-depth response so a
+		// close body cannot turn the overlapping coloured smoke into a white hotspot.
+		var depthIntensityScale = Mathf.Lerp(0.4f, 0.55f, Mathf.SmoothStep(0.0f, 1.0f, closeness));
+		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * depthIntensityScale;
+		// Native alpha blending: intensity controls opacity only, not RGB brightness.
+		_outwardParticleSystem.SelfModulate = new Color(1.0f, 1.0f, 1.0f,
+			1.0f - Mathf.Exp(-outwardIntensity));
 		_elapsedTime += delta;
 		_lastFingerUpdateTime += delta;
 		var isPointingActive = _isPointingUp && (_lastFingerUpdateTime < 0.35);
@@ -285,17 +351,35 @@ public partial class particles : CanvasLayer
 		);
 
 		// 2. Émission des particules de silhouette corporelle
-		if (_maskPoints.Count == 0)
-			return;
-
-		_emissionRemainder += ParticlesPerSecond * (float)delta;
-		var particleCount = Mathf.FloorToInt(_emissionRemainder);
-		_emissionRemainder -= particleCount;
-
-		for (var i = 0; i < particleCount; i++)
+		// Do not catch up an entire stalled frame with a burst of particles.
+		var emissionDelta = (float)Math.Clamp(delta, 0.0, 0.1);
+		if (_maskPoints.Count > 0)
 		{
-			EmitSampledParticle(isPointingActive);
+			_emissionRemainder += Mathf.Max(0, ParticlesPerSecond) * emissionDelta;
+			var particleCount = Mathf.FloorToInt(_emissionRemainder);
+			_emissionRemainder -= particleCount;
+
+			for (var i = 0; i < particleCount; i++)
+				EmitSampledParticle(isPointingActive);
 		}
+		else
+		{
+			_emissionRemainder = 0.0f;
+		}
+
+		// OutwardSmoke now drains only the zones which the body has just released.
+		var requestedRate = Mathf.Max(0, OutwardParticlesPerSecond);
+		var safeRate = _outwardParticleSystem.Amount * 0.9f / (float)_outwardParticleSystem.Lifetime;
+		if (_releasedTrailSamples.Count == 0)
+		{
+			_outwardEmissionRemainder = 0.0f;
+			return;
+		}
+		_outwardEmissionRemainder += Mathf.Min(requestedRate, safeRate) * emissionDelta;
+		var outwardParticleCount = Mathf.FloorToInt(_outwardEmissionRemainder);
+		_outwardEmissionRemainder -= outwardParticleCount;
+		for (var i = 0; i < outwardParticleCount && _releasedTrailSamples.Count > 0; i++)
+			EmitOutwardParticle();
 	}
 
 	/// <summary>
@@ -416,6 +500,7 @@ public partial class particles : CanvasLayer
 			throw new ArgumentNullException(nameof(depthImage));
 
 		_maskSize = new Vector2I(depthImage.GetWidth(), depthImage.GetHeight());
+		UpdateMaskMapping();
 
 		// Traitement de segmentation et tracking délégué au module spécialisé
 		_bodyDetector.ProcessDepthImage(
@@ -430,12 +515,15 @@ public partial class particles : CanvasLayer
 			_random,
 			_maskPoints
 		);
-
 		_ambientFireflies.UpdateSilhouette(
 			_maskPoints,
 			_bodyDetector.TrackedBodies,
 			_maskSize
 		);
+		UpdateOutwardDepth();
+		UpdateReleasedMaskZones(depthImage);
+		if (_demoBodyEnabled)
+			UpdateReleasedDemoZones();
 
 		// Signal si le nombre de corps a évolué
 		var currentCount = _bodyDetector.DetectedBodyCount;
@@ -471,14 +559,15 @@ public partial class particles : CanvasLayer
 	private void EmitSampledParticle(bool isPointingActive)
 	{
 		var sample = _maskPoints[_random.RandiRange(0, _maskPoints.Count - 1)];
-		var screenPos = MaskToScreen(sample.Position);
+		var screenPos = BodyMaskToScreen(sample.Position);
 
 		var palettes = BodyPalette.DefaultPalettes;
 		var paletteIndex = sample.PaletteIndex % palettes.Length;
 		var palette = palettes[paletteIndex];
 
-		// La profondeur pilote à la fois la couleur et la proportion de scintillements.
-		var closeness = _NormalizeDepth(sample.NormalizedDepth);
+		// Keep main's calibrated live-camera depth, while the demo keeps its explicit depth.
+		var closeness = _demoBodyEnabled ? GetCloseness(_demoBodyDepth)
+			: _NormalizeDepth(sample.NormalizedDepth);
 		var bodyColor = ColorFromDepth ? palette.EvaluateBody(closeness) : palette.ColorNear;
 		var sparkleChance = Mathf.Lerp(0.01f, 0.85f, Mathf.Pow(closeness, 1.8f));
 
@@ -675,19 +764,24 @@ public partial class particles : CanvasLayer
 	/// </summary>
 	public Vector2 MaskToScreen(Vector2 maskPoint)
 	{
+		return _maskToScreen * maskPoint;
+	}
+
+	private void UpdateMaskMapping()
+	{
 		var viewport = GetViewport().GetVisibleRect().Size;
 		var scaleX = viewport.X / Mathf.Max(_maskSize.X, 1);
 		var scaleY = viewport.Y / Mathf.Max(_maskSize.Y, 1);
 		var scale = PreserveAspectRatio ? Mathf.Min(scaleX, scaleY) : 1.0f;
 
-		var x = PreserveAspectRatio
-			? (viewport.X - _maskSize.X * scale) * 0.5f + maskPoint.X * scale
-			: maskPoint.X * scaleX;
-		var y = PreserveAspectRatio
-			? (viewport.Y - _maskSize.Y * scale) * 0.5f + maskPoint.Y * scale
-			: maskPoint.Y * scaleY;
-
-		return new Vector2(x, y);
+		var screenScale = PreserveAspectRatio ? Vector2.One * scale : new Vector2(scaleX, scaleY);
+		var center = new Vector2(_maskSize.X, _maskSize.Y) * 0.5f;
+		_maskToScreen = new Transform2D(new Vector2(screenScale.X, 0), new Vector2(0, screenScale.Y),
+			(viewport - center * 2.0f * screenScale) * 0.5f);
+		_bodyToScreen = _demoBodyEnabled
+			? _maskToScreen * new Transform2D(Vector2.Right * _demoBodyScale, Vector2.Down * _demoBodyScale,
+				center * (1.0f - _demoBodyScale) + new Vector2(_demoBodyOffsetX, 0))
+			: _maskToScreen;
 	}
 
 	// =========================================================================
@@ -1035,4 +1129,376 @@ public partial class particles : CanvasLayer
 		}
 		return ImageTexture.CreateFromImage(image);
 	}
+
+	private void UpdateOutwardDepth()
+	{
+		// BodyDetector already owns the sampled analogue mask. Reuse those samples:
+		// no RGB copy and no second edge cache are needed for the coloured trail.
+		// Keep the previous value on an empty mask so existing particles fade naturally.
+		if (_maskPoints.Count == 0)
+			return;
+
+		var depthSum = 0.0f;
+		foreach (var sample in _maskPoints)
+			depthSum += sample.NormalizedDepth;
+		_meanBodyDepth = depthSum / _maskPoints.Count;
+	}
+
+	private void UpdateReleasedMaskZones(Image depthImage)
+	{
+		var stride = Mathf.Max(1, ClusterStride);
+		var width = depthImage.GetWidth();
+		var height = depthImage.GetHeight();
+		var gridWidth = (width + stride - 1) / stride;
+		var gridHeight = (height + stride - 1) / stride;
+		EnsureMaskReleaseGrid(gridWidth, gridHeight, stride);
+
+		Image? converted = null;
+		if (depthImage.GetFormat() != Image.Format.Rgb8)
+		{
+			converted = (Image)depthImage.Duplicate();
+			converted.Convert(Image.Format.Rgb8);
+		}
+		using (converted)
+		{
+			var pixels = (converted ?? depthImage).GetData();
+			var hasActiveCell = false;
+			_releasedTrailBatch.Clear();
+			for (var gridY = 0; gridY < gridHeight; gridY++)
+			{
+				var y = Mathf.Min(gridY * stride, height - 1);
+				for (var gridX = 0; gridX < gridWidth; gridX++)
+				{
+					var x = Mathf.Min(gridX * stride, width - 1);
+					var index = gridY * gridWidth + gridX;
+					var depth = pixels[(y * width + x) * 3] / 255.0f;
+					var active = depth > 0.0f;
+					if (_confirmedMaskActive[index] && !active)
+					{
+						_releasedTrailBatch.Add(new ReleasedMaskSample(
+							new Vector2(x + stride * 0.5f, y + stride * 0.5f), _previousMaskDepth[index], false));
+					}
+
+					_confirmedMaskActive[index] = active && _previousMaskActive[index];
+					_previousMaskActive[index] = active;
+					_previousMaskDepth[index] = active ? depth : 0.0f;
+					hasActiveCell |= active;
+				}
+			}
+			QueueReleasedTrailBatch();
+			if (!hasActiveCell)
+				ResetMaskReleaseHistory();
+		}
+	}
+
+	private void EnsureMaskReleaseGrid(int width, int height, int stride)
+	{
+		if (_releaseGridWidth == width && _releaseGridHeight == height && _releaseGridStride == stride)
+			return;
+
+		_releaseGridWidth = width;
+		_releaseGridHeight = height;
+		_releaseGridStride = stride;
+		var count = width * height;
+		_previousMaskActive = new bool[count];
+		_confirmedMaskActive = new bool[count];
+		_previousMaskDepth = new float[count];
+	}
+
+	private void ResetMaskReleaseHistory()
+	{
+		Array.Clear(_previousMaskActive, 0, _previousMaskActive.Length);
+		Array.Clear(_confirmedMaskActive, 0, _confirmedMaskActive.Length);
+		Array.Clear(_previousMaskDepth, 0, _previousMaskDepth.Length);
+	}
+
+	private void UpdateReleasedDemoZones()
+	{
+		if (_maskPoints.Count == 0)
+		{
+			ResetDemoReleaseHistory();
+			return;
+		}
+
+		var viewport = GetViewport().GetVisibleRect().Size;
+		if (viewport.X <= 1.0f || viewport.Y <= 1.0f)
+			viewport = new Vector2(1920.0f, 1080.0f);
+		var cellSize = Mathf.Max(4, ClusterStride * 2);
+		var gridSize = new Vector2I(
+			Mathf.CeilToInt(viewport.X / cellSize),
+			Mathf.CeilToInt(viewport.Y / cellSize));
+		EnsureDemoReleaseGrid(gridSize);
+		Array.Clear(_currentDemoActive, 0, _currentDemoActive.Length);
+		Array.Clear(_currentDemoDepth, 0, _currentDemoDepth.Length);
+
+		foreach (var sample in _maskPoints)
+		{
+			var screenPosition = BodyMaskToScreen(sample.Position);
+			var gridX = Mathf.FloorToInt(screenPosition.X / cellSize);
+			var gridY = Mathf.FloorToInt(screenPosition.Y / cellSize);
+			if (gridX < 0 || gridY < 0 || gridX >= gridSize.X || gridY >= gridSize.Y)
+				continue;
+			var index = gridY * gridSize.X + gridX;
+			_currentDemoActive[index] = true;
+			_currentDemoDepth[index] = Mathf.Max(_currentDemoDepth[index], sample.NormalizedDepth);
+		}
+
+		_releasedTrailBatch.Clear();
+		for (var index = 0; index < _currentDemoActive.Length; index++)
+		{
+			if (_confirmedDemoActive[index] && !_currentDemoActive[index])
+			{
+				var gridX = index % gridSize.X;
+				var gridY = index / gridSize.X;
+				_releasedTrailBatch.Add(new ReleasedMaskSample(
+					new Vector2((gridX + 0.5f) * cellSize, (gridY + 0.5f) * cellSize), _previousDemoDepth[index], true));
+			}
+			_confirmedDemoActive[index] = _currentDemoActive[index] && _previousDemoActive[index];
+			_previousDemoActive[index] = _currentDemoActive[index];
+			_previousDemoDepth[index] = _currentDemoActive[index] ? _currentDemoDepth[index] : 0.0f;
+		}
+		QueueReleasedTrailBatch();
+	}
+
+	private void EnsureDemoReleaseGrid(Vector2I size)
+	{
+		if (_demoReleaseGridSize == size)
+			return;
+
+		_demoReleaseGridSize = size;
+		var count = size.X * size.Y;
+		_previousDemoActive = new bool[count];
+		_confirmedDemoActive = new bool[count];
+		_previousDemoDepth = new float[count];
+		_currentDemoActive = new bool[count];
+		_currentDemoDepth = new float[count];
+	}
+
+	private void ResetDemoReleaseHistory()
+	{
+		Array.Clear(_previousDemoActive, 0, _previousDemoActive.Length);
+		Array.Clear(_confirmedDemoActive, 0, _confirmedDemoActive.Length);
+		Array.Clear(_previousDemoDepth, 0, _previousDemoDepth.Length);
+		Array.Clear(_currentDemoActive, 0, _currentDemoActive.Length);
+		Array.Clear(_currentDemoDepth, 0, _currentDemoDepth.Length);
+	}
+
+	private void QueueReleasedTrailBatch()
+	{
+		if (_releasedTrailBatch.Count == 0)
+			return;
+
+		// Shuffle one released frame before queueing it: a body edge is stored in
+		// raster order, but must never appear as a scan in the particle trail.
+		for (var i = _releasedTrailBatch.Count - 1; i > 0; i--)
+		{
+			var swapIndex = _random.RandiRange(0, i);
+			(_releasedTrailBatch[i], _releasedTrailBatch[swapIndex]) =
+				(_releasedTrailBatch[swapIndex], _releasedTrailBatch[i]);
+		}
+
+		var depthSum = 0.0f;
+		var capacity = Mathf.Max(1, MaxOutwardParticles);
+		foreach (var sample in _releasedTrailBatch)
+		{
+			while (_releasedTrailSamples.Count >= capacity)
+				_releasedTrailSamples.Dequeue();
+			_releasedTrailSamples.Enqueue(sample);
+			depthSum += sample.NormalizedDepth;
+		}
+		_meanReleasedDepth = depthSum / _releasedTrailBatch.Count;
+	}
+
+	public void SetDemoBodyTransform(bool enabled, float offsetX, float scale, float depth)
+	{
+		if (_demoBodyEnabled && !enabled)
+			_meanBodyDepth = _demoBodyDepth;
+		_demoBodyEnabled = enabled;
+		_demoBodyOffsetX = offsetX;
+		_demoBodyScale = Mathf.Max(0.01f, scale);
+		_demoBodyDepth = Mathf.Clamp(depth, 0.0f, 1.0f);
+		UpdateMaskMapping();
+		if (enabled)
+		{
+			foreach (var body in _bodyDetector.TrackedBodies)
+				body.AvgDepth = _demoBodyDepth;
+			UpdateReleasedDemoZones();
+		}
+		else
+		{
+			ResetDemoReleaseHistory();
+		}
+		if (ShowBodyDebug) _debugOverlay.QueueRedraw();
+	}
+
+	private void EmitOutwardParticle()
+	{
+		var sample = _releasedTrailSamples.Dequeue();
+		var closeness = GetCloseness(sample.NormalizedDepth);
+		if (_random.Randf() > Mathf.Lerp(0.28f, 1.0f, closeness))
+			return;
+
+		var screenPosition = sample.IsScreenPosition ? sample.Position : BodyMaskToScreen(sample.Position);
+		// Share the density's depth thresholds: 40% fall speed far away, full speed up close.
+		var depthSpeed = Mathf.Max(0.0f, OutwardSpeed) * Mathf.Lerp(0.4f, 1.0f, closeness);
+		// The source is the full body. A small variation plus turbulence makes the
+		// persistent particles read as a flowing multicolour trail, not an outline jet.
+		var outwardVelocity = new Vector2(_random.RandfRange(-0.18f, 0.18f), 1.0f)
+			* depthSpeed * _random.RandfRange(0.7f, 1.05f);
+
+		_outwardParticleSystem.EmitParticle(
+			new Transform2D(0.0f, screenPosition),
+			outwardVelocity,
+			Colors.White, Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity));
+	}
+
+	private float GetCloseness(float normalizedDepth)
+	{
+		var depthSpan = Mathf.Max(0.01f, DepthNearThreshold - DepthFarThreshold);
+		return Mathf.Clamp((normalizedDepth - DepthFarThreshold) / depthSpan, 0.0f, 1.0f);
+	}
+
+	public Vector2 BodyMaskToScreen(Vector2 maskPoint)
+	{
+		return _bodyToScreen * maskPoint;
+	}
+
+	private GpuParticles2D CreateOutwardParticleSystem()
+	{
+		// Stay visible during travel, then progressively dissolve before the lifetime cutoff.
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		// Soft birth, then a long low-opacity plateau. This exposes the complete hue
+		// cycle along the trail instead of letting one bright age slice dominate it.
+		alphaCurve.AddPoint(new Vector2(0.08f, 0.015f));
+		alphaCurve.AddPoint(new Vector2(0.20f, 0.045f));
+		alphaCurve.AddPoint(new Vector2(0.68f, 0.030f));
+		alphaCurve.AddPoint(new Vector2(0.90f, 0.004f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var scaleCurve = new Curve();
+		scaleCurve.MaxValue = 1.4f;
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.8f));
+		scaleCurve.AddPoint(new Vector2(0.4f, 1.05f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 1.35f));
+
+		// Complete one hue cycle while the particle is actually visible.  If the cycle
+		// is spread over its full lifetime, the transparent birth/death sections hide
+		// green, cyan or violet and leave only a small red/magenta slice onscreen.
+		var hueRamp = new Gradient();
+		const int hueSteps = 12;
+		const float visibleStart = 0.12f;
+		const float visibleEnd = 0.84f;
+		for (var i = 0; i <= hueSteps; i++)
+		{
+			var progress = i / (float)hueSteps;
+			var visibleProgress = (progress - visibleStart) / (visibleEnd - visibleStart);
+			var hue = Mathf.PosMod(0.5f - visibleProgress, 1.0f);
+			var color = Color.FromHsv(hue, 0.92f, 1.0f);
+			if (i == 0)
+				hueRamp.SetColor(0, color);
+			else
+				hueRamp.AddPoint(progress, color);
+		}
+
+		// Let particles leave their source before the shared flow bends their trajectories.
+		var turbulenceCurve = new Curve();
+		turbulenceCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		turbulenceCurve.AddPoint(new Vector2(0.25f, 0.5f));
+		turbulenceCurve.AddPoint(new Vector2(0.6f, 1.0f));
+		turbulenceCurve.AddPoint(new Vector2(1.0f, 0.5f));
+		var material = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			TurbulenceNoiseStrength = 1.0f,
+			TurbulenceNoiseSpeed = Vector3.Zero,
+			TurbulenceInfluenceOverLife = new CurveTexture { Curve = turbulenceCurve },
+			TurbulenceInitialDisplacementMin = 0.0f,
+			TurbulenceInitialDisplacementMax = 0.0f,
+			AngleMin = 0.0f,
+			AngleMax = 360.0f,
+			AngularVelocityMin = -12.0f,
+			AngularVelocityMax = 12.0f,
+			LifetimeRandomness = 0.12f,
+			InitialVelocityMin = 0.0f,
+			InitialVelocityMax = 0.0f,
+			ScaleCurve = new CurveTexture { Curve = scaleCurve },
+			AlphaCurve = new CurveTexture { Curve = alphaCurve },
+			ColorRamp = new GradientTexture1D { Gradient = hueRamp },
+			Color = Colors.White,
+		};
+
+		return new GpuParticles2D
+		{
+			Name = "OutwardSmoke",
+			Amount = Mathf.Max(1, MaxOutwardParticles),
+			Lifetime = Mathf.Max(0.1f, OutwardLifetime),
+			LocalCoords = false,
+			Emitting = false,
+			FixedFps = 60,
+			Interpolate = true,
+			TextureFilter = CanvasItem.TextureFilterEnum.Linear,
+			Texture = CreateCloudTexture(CloudTextureSize),
+			ProcessMaterial = material,
+			VisibilityRect = new Rect2(-300, -300, 10600, 10600),
+		};
+	}
+
+	private void ApplyOutwardSettings()
+	{
+		var settings = new OutwardSettings(OutwardLifetime, MaxOutwardParticles, OutwardSize, OutwardGravity,
+			OutwardDamping, OutwardTurbulenceEnabled, OutwardTurbulenceInfluence,
+			OutwardTurbulenceScale, OutwardTurbulenceEvolution);
+		if (_appliedOutwardSettings == settings)
+			return;
+		var material = (ParticleProcessMaterial)_outwardParticleSystem.ProcessMaterial;
+		material.Gravity = new Vector3(0, OutwardGravity, 0);
+		material.DampingMin = Mathf.Max(0, OutwardDamping);
+		material.DampingMax = material.DampingMin * 1.5f;
+		material.ScaleMin = Mathf.Max(1, OutwardSize) / CloudTextureSize * 0.85f;
+		material.ScaleMax = Mathf.Max(1, OutwardSize) / CloudTextureSize * 1.15f;
+		material.TurbulenceEnabled = OutwardTurbulenceEnabled;
+		material.TurbulenceInfluenceMin = Mathf.Clamp(OutwardTurbulenceInfluence, 0, 1) * 0.5f;
+		material.TurbulenceInfluenceMax = Mathf.Clamp(OutwardTurbulenceInfluence, 0, 1);
+		material.TurbulenceNoiseScale = Mathf.Clamp(OutwardTurbulenceScale, 0, 9.99f);
+		material.TurbulenceNoiseSpeedRandom = Mathf.Max(0, OutwardTurbulenceEvolution);
+		if (_outwardParticleSystem.Amount != Mathf.Max(1, MaxOutwardParticles))
+			_outwardParticleSystem.Amount = Mathf.Max(1, MaxOutwardParticles);
+		if (_outwardParticleSystem.Lifetime != Mathf.Max(0.1f, OutwardLifetime))
+			_outwardParticleSystem.Lifetime = Mathf.Max(0.1f, OutwardLifetime);
+		_appliedOutwardSettings = settings;
+	}
+
+	private const int CloudTextureSize = 128;
+
+	// Connected, low-frequency lobes: noise distorts the shape, never punches holes in it.
+	private static ImageTexture CreateCloudTexture(int size)
+	{
+		using var noise = new FastNoiseLite { Seed = 173, Frequency = 0.018f };
+		using var image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
+		var center = (size - 1) * 0.5f;
+		for (var y = 0; y < size; y++)
+		{
+			for (var x = 0; x < size; x++)
+			{
+				var p = new Vector2(x - center, y - center) / center;
+				var envelope = 1.0f - Mathf.SmoothStep(0.65f, 1.0f, p.Length());
+				var warp = new Vector2(noise.GetNoise2D(x, y), noise.GetNoise2D(x + size, y)) * 0.16f;
+				p += warp;
+				var a = (p + new Vector2(0.20f, -0.12f)) / new Vector2(0.92f, 0.66f);
+				var b = (p - new Vector2(0.23f, -0.12f)) / new Vector2(0.62f, 0.98f);
+				var c = (p - new Vector2(0.12f, 0.33f)) / new Vector2(0.68f, 0.55f);
+				var density = 0.65f * Mathf.Exp(-4.0f * a.LengthSquared())
+					+ 0.55f * Mathf.Exp(-4.0f * b.LengthSquared())
+					+ 0.40f * Mathf.Exp(-4.0f * c.LengthSquared());
+				image.SetPixel(x, y, new Color(1, 1, 1, Mathf.Clamp(density * envelope * 0.65f, 0, 1)));
+			}
+		}
+		return ImageTexture.CreateFromImage(image);
+	}
+
+	private readonly record struct ReleasedMaskSample(Vector2 Position, float NormalizedDepth, bool IsScreenPosition);
+	private readonly record struct OutwardSettings(float Lifetime, int Maximum, float Size, float Gravity,
+		float Damping, bool Turbulence, float Influence, float Scale, float Evolution);
 }

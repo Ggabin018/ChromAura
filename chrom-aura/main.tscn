@@ -6,8 +6,11 @@
 [ext_resource type="Texture2D" uid="uid://ceyxyo0ytjnp5" path="res://assets/pointing_up_icon_white.png" id="4_icon"]
 [ext_resource type="Script" uid="uid://dlsdvw5temig8" path="res://audio_manager.gd" id="5_audio"]
 [ext_resource type="Shader" uid="uid://xt02x7ghojgo" path="res://shaders/background_waves.gdshader" id="5_bg_waves"]
+[ext_resource type="Script" uid="uid://bup4ajv8mtck1" path="res://instructions.gd" id="6_efxa6"]
+[ext_resource type="Texture2D" uid="uid://bkqc3fvikgvwa" path="res://assets/pistol_icon_white.png" id="7_4c57u"]
 [ext_resource type="Script" uid="uid://dww50jea8wcpy" path="res://hand_gesture_engine.gd" id="7_gesture_engine"]
-[ext_resource type="Script" path="res://scripts/heart_particle_manager.gd" id="8_heart_particles"]
+[ext_resource type="Texture2D" uid="uid://30qag8eusb8t" path="res://assets/thumb_up_to_down_icon_white.png" id="8_efxa6"]
+[ext_resource type="Script" uid="uid://di45j0or1m7dh" path="res://scripts/heart_particle_manager.gd" id="8_heart_particles"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_bg_waves"]
 shader = ExtResource("5_bg_waves")
@@ -19,22 +22,6 @@ shader_parameter/intensity = 0.1
 shader_parameter/base_color = Color(0.015, 0.02, 0.035, 1)
 shader_parameter/color_deep = Color(0.04, 0.16, 0.5, 1)
 shader_parameter/color_light = Color(0.3, 0.62, 0.95, 1)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_instruction"]
-content_margin_left = 24.0
-content_margin_top = 8.0
-content_margin_right = 24.0
-content_margin_bottom = 8.0
-bg_color = Color(0.05, 0.07, 0.12, 0.7)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.3, 0.8, 1, 0.45)
-corner_radius_top_left = 22
-corner_radius_top_right = 22
-corner_radius_bottom_right = 22
-corner_radius_bottom_left = 22
 
 [node name="Node" type="Node" unique_id=1008517725]
 
@@ -148,24 +135,21 @@ horizontal_alignment = 2
 
 [node name="DrawInstructionLayer" type="CanvasLayer" parent="Control" unique_id=2004221877]
 layer = 3
+script = ExtResource("6_efxa6")
 
 [node name="DrawInstruction" type="PanelContainer" parent="Control/DrawInstructionLayer" unique_id=987654321]
-anchors_preset = 5
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -140.0
+offset_left = 20.0
 offset_top = 20.0
-offset_right = 140.0
-offset_bottom = 76.0
-grow_horizontal = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_instruction")
+offset_right = 335.0
+offset_bottom = 78.0
 
-[node name="HBoxContainer" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=67839875]
+[node name="Dessinez" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=67839875]
+visible = false
 layout_mode = 2
 theme_override_constants/separation = 14
 alignment = 1
 
-[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/HBoxContainer" unique_id=260783285]
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Dessinez" unique_id=260783285]
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
@@ -175,48 +159,59 @@ theme_override_font_sizes/font_size = 28
 text = "Dessinez"
 vertical_alignment = 1
 
-[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/HBoxContainer" unique_id=1865829958]
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Dessinez" unique_id=1865829958]
 custom_minimum_size = Vector2(36, 42)
 layout_mode = 2
 texture = ExtResource("4_icon")
 expand_mode = 1
 stretch_mode = 5
 
-[node name="AudioManager" type="Node" parent="Control" unique_id=2007512884]
-script = ExtResource("5_audio")
-
-[node name="RgbDebugLayer" type="CanvasLayer" parent="Control"]
-layer = 100
+[node name="Pisolet" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=1968552056]
 visible = false
+layout_mode = 2
+theme_override_constants/separation = 14
+alignment = 1
 
-[node name="Background" type="ColorRect" parent="Control/RgbDebugLayer"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
-color = Color(0, 0, 0, 1)
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Pisolet" unique_id=52389991]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 28
+text = "Tirez"
+vertical_alignment = 1
 
-[node name="CameraView" type="TextureRect" parent="Control/RgbDebugLayer"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Pisolet" unique_id=2029573701]
+custom_minimum_size = Vector2(36, 42)
+layout_mode = 2
+texture = ExtResource("7_4c57u")
 expand_mode = 1
 stretch_mode = 5
 
-[node name="Hint" type="Label" parent="Control/RgbDebugLayer"]
-offset_left = 16.0
-offset_top = 16.0
-offset_right = 430.0
-offset_bottom = 52.0
-mouse_filter = 2
+[node name="EGWilhelmScream" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=54700822]
+visible = false
+layout_mode = 2
+offset_transform_enabled = true
+theme_override_constants/separation = 14
+alignment = 1
+
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/EGWilhelmScream" unique_id=1891085383]
+visible = false
+layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.9)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
 theme_override_constants/shadow_offset_x = 2
 theme_override_constants/shadow_offset_y = 2
-theme_override_font_sizes/font_size = 20
-text = "Flux RGB MediaPipe — R pour revenir"
+theme_override_font_sizes/font_size = 28
+vertical_alignment = 1
+
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/EGWilhelmScream" unique_id=2092522622]
+custom_minimum_size = Vector2(36, 42)
+layout_mode = 2
+texture = ExtResource("8_efxa6")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="AudioManager" type="Node" parent="Control" unique_id=2007512884]
+script = ExtResource("5_audio")

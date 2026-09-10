@@ -42,15 +42,15 @@ public partial class BodyDebugOverlay : Control
 		foreach (var body in bodies)
 		{
 			var pal = palettes[body.PaletteIndex % palettes.Length];
-			var pMin = _particleController.MaskToScreen(body.BoundingBox.Position);
-			var pMax = _particleController.MaskToScreen(body.BoundingBox.End);
+			var pMin = _particleController.BodyMaskToScreen(body.BoundingBox.Position);
+			var pMax = _particleController.BodyMaskToScreen(body.BoundingBox.End);
 			var rect = new Rect2(pMin, pMax - pMin);
 
 			// 1. Contour de la boîte englobante (couleur proche de la palette)
 			DrawRect(rect, new Color(pal.ColorNear.R, pal.ColorNear.G, pal.ColorNear.B, 0.85f), false, 2.0f);
 
 			// 2. Marqueur du centre de masse (centroïde)
-			var screenCentroid = _particleController.MaskToScreen(body.Centroid);
+			var screenCentroid = _particleController.BodyMaskToScreen(body.Centroid);
 			DrawCircle(screenCentroid, 5.0f, pal.ColorFar);
 
 			// 3. Étiquette texte (Personne X, Nom de la palette, Pointeur actif)
