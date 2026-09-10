@@ -17,6 +17,7 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	{
 		public Vector2 Position;
 		public Vector2 Velocity;
+		public Vector2 HomeUv;
 		public float Phase;
 		public float WanderFrequency;
 		public float Size;
@@ -46,6 +47,9 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	private int _fieldWidth;
 	private int _fieldHeight;
 	private double _elapsedTime;
+	private float _secondsWithoutBodies;
+	private float _returnBlend;
+	private bool _hasVisibleBodies;
 
 	public int ParticleCount { get; set; } = 250;
 	public float AmbientSpeed { get; set; } = 12.0f;
@@ -56,6 +60,9 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	public float ParticleSizeMax { get; set; } = 8.0f;
 	public float TwinkleSpeed { get; set; } = 1.0f;
 	public float AmbientOpacity { get; set; } = 0.34f;
+	public float ReturnStrength { get; set; } = 0.22f;
+	public float AnchorWanderRadius { get; set; } = 18.0f;
+	public float ReturnDelay { get; set; } = 0.4f;
 	public bool PreserveAspectRatio { get; set; } = true;
 
 	public void Initialize(bool additiveBlending)
@@ -106,6 +113,14 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 				_bodyMotions.Add(new BodyMotion(body.Centroid, body.Velocity));
 		}
 
+		_hasVisibleBodies = _bodyMotions.Count > 0;
+		if (_hasVisibleBodies)
+		{
+			// Une silhouette reprend toujours la priorité sur le rappel vers les ancres.
+			_secondsWithoutBodies = 0.0f;
+			_returnBlend = 0.0f;
+		}
+
 		BuildDensityField();
 	}
 
@@ -121,6 +136,7 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		HandleViewportResize(viewportSize);
 		_elapsedTime += delta;
 		var dt = Mathf.Min((float)delta, 1.0f / 20.0f);
+		UpdateReturnState(dt);
 		var damping = Mathf.Exp(-1.25f * dt);
 		var maxSpeed = Mathf.Max(AmbientSpeed * 6.0f, 40.0f);
 
@@ -134,6 +150,7 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 			) * (AmbientSpeed * 0.72f);
 
 			var acceleration = wander;
+			AddAnchorForce(firefly, viewportSize, time, ref acceleration);
 			AddSilhouetteForces(firefly.Position, viewportSize, ref acceleration);
 
 			firefly.Velocity = firefly.Velocity * damping + acceleration * dt;
@@ -179,29 +196,78 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 			viewportSize = new Vector2(1920.0f, 1080.0f);
 		_lastViewportSize = viewportSize;
 
-		for (var i = 0; i < count; i++)
+		var aspectRatio = viewportSize.X / Mathf.Max(viewportSize.Y, 1.0f);
+		var rowCount = Mathf.Clamp(Mathf.RoundToInt(Mathf.Sqrt(count / aspectRatio)), 1, count);
+		var baseColumns = count / rowCount;
+		var rowsWithExtraColumn = count % rowCount;
+		var particleIndex = 0;
+
+		for (var row = 0; row < rowCount; row++)
 		{
-			var angle = _random.RandfRange(0.0f, Mathf.Tau);
-			var colorMix = _random.Randf();
-			_fireflies[i] = new Firefly
+			var columnsInRow = baseColumns + (row < rowsWithExtraColumn ? 1 : 0);
+			for (var column = 0; column < columnsInRow; column++)
 			{
-				Position = new Vector2(
-					_random.RandfRange(0.0f, viewportSize.X),
-					_random.RandfRange(0.0f, viewportSize.Y)
-				),
-				Velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle))
-					* _random.RandfRange(AmbientSpeed * 0.35f, AmbientSpeed),
-				Phase = _random.RandfRange(0.0f, Mathf.Tau),
-				WanderFrequency = _random.RandfRange(0.32f, 0.78f),
-				Size = _random.RandfRange(ParticleSizeMin, ParticleSizeMax),
-				Color = new Color(
-					Mathf.Lerp(0.62f, 0.92f, colorMix),
-					Mathf.Lerp(0.86f, 1.0f, colorMix),
-					1.0f,
-					AmbientOpacity
-				),
-			};
+				var homeUv = new Vector2(
+					(column + 0.5f + _random.RandfRange(-0.28f, 0.28f)) / columnsInRow,
+					(row + 0.5f + _random.RandfRange(-0.28f, 0.28f)) / rowCount
+				);
+				var angle = _random.RandfRange(0.0f, Mathf.Tau);
+				var colorMix = _random.Randf();
+				var initialOffset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle))
+					* _random.RandfRange(0.0f, AnchorWanderRadius * 0.35f);
+				_fireflies[particleIndex++] = new Firefly
+				{
+					Position = homeUv * viewportSize + initialOffset,
+					Velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle))
+						* _random.RandfRange(AmbientSpeed * 0.35f, AmbientSpeed),
+					HomeUv = homeUv,
+					Phase = _random.RandfRange(0.0f, Mathf.Tau),
+					WanderFrequency = _random.RandfRange(0.32f, 0.78f),
+					Size = _random.RandfRange(ParticleSizeMin, ParticleSizeMax),
+					Color = new Color(
+						Mathf.Lerp(0.62f, 0.92f, colorMix),
+						Mathf.Lerp(0.86f, 1.0f, colorMix),
+						1.0f,
+						AmbientOpacity
+					),
+				};
+			}
 		}
+	}
+
+	private void UpdateReturnState(float delta)
+	{
+		if (_hasVisibleBodies)
+		{
+			_secondsWithoutBodies = 0.0f;
+			_returnBlend = 0.0f;
+			return;
+		}
+
+		_secondsWithoutBodies += delta;
+		if (_secondsWithoutBodies >= Mathf.Max(ReturnDelay, 0.0f))
+		{
+			// Montée en puissance sur une seconde : le remplissage démarre sans à-coup.
+			_returnBlend = Mathf.MoveToward(_returnBlend, 1.0f, delta);
+		}
+	}
+
+	private void AddAnchorForce(
+		Firefly firefly,
+		Vector2 viewportSize,
+		float time,
+		ref Vector2 acceleration)
+	{
+		if (_returnBlend <= 0.0f || ReturnStrength <= 0.0f)
+			return;
+
+		var anchorOffset = new Vector2(
+			Mathf.Cos(time * firefly.WanderFrequency * 0.47f + firefly.Phase),
+			Mathf.Sin(time * firefly.WanderFrequency * 0.39f + firefly.Phase * 1.37f)
+		) * AnchorWanderRadius;
+		var anchorPosition = firefly.HomeUv * viewportSize + anchorOffset;
+		var displacement = ToroidalDelta(firefly.Position, anchorPosition, viewportSize);
+		acceleration += displacement * (ReturnStrength * _returnBlend);
 	}
 
 	private void EnsureFieldStorage()
@@ -380,6 +446,18 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		else if (position.X > viewportSize.X + margin) position.X = -margin;
 		if (position.Y < -margin) position.Y = viewportSize.Y + margin;
 		else if (position.Y > viewportSize.Y + margin) position.Y = -margin;
+	}
+
+	private static Vector2 ToroidalDelta(Vector2 from, Vector2 to, Vector2 viewportSize)
+	{
+		var delta = to - from;
+		var halfWidth = viewportSize.X * 0.5f;
+		var halfHeight = viewportSize.Y * 0.5f;
+		if (delta.X > halfWidth) delta.X -= viewportSize.X;
+		else if (delta.X < -halfWidth) delta.X += viewportSize.X;
+		if (delta.Y > halfHeight) delta.Y -= viewportSize.Y;
+		else if (delta.Y < -halfHeight) delta.Y += viewportSize.Y;
+		return delta;
 	}
 
 	private Vector2 ScreenToMask(Vector2 screenPosition, Vector2 viewportSize)
