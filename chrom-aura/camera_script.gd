@@ -7,11 +7,12 @@ extends Control
 @export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.5
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
-@export_group("Kamehameha")
-@export_range(0.5, 4.0, 0.05) var kamehameha_final_join_distance_palms := 2.10
-@export_range(0.10, 0.45, 0.01) var kamehameha_side_zone_x := 0.34
-@export_range(50, 1000, 10) var kamehameha_hold_grace_ms := 450
-# Pose statique : deux mains ouvertes suffisent pour activer l'effet.
+@export_group("Laser lateral")
+@export_range(0.10, 0.45, 0.01) var side_laser_zone_x := 0.34
+@export_range(1, 4, 1) var side_laser_min_bent_fingers := 3
+@export_range(50, 1200, 10) var side_laser_hold_grace_ms := 500
+@export_range(80.0, 175.0, 1.0) var side_laser_max_tip_joint_angle := 150.0
+@export_range(0.50, 2.00, 0.05) var side_laser_min_tip_reach := 0.80
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
@@ -40,14 +41,10 @@ var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
 
-var _kamehameha_candidate_since_ms := -1
-var _kamehameha_last_joined_ms := -1
-var _kamehameha_active := false
-var _kamehameha_last_valid_ms := -1
-var _kamehameha_last_left_uv := Vector2.ZERO
-var _kamehameha_last_right_uv := Vector2.ZERO
-var _kamehameha_last_anchor_uv := Vector2.ZERO
-var _kamehameha_pair_ids := Vector2i(-1, -1)
+var _side_laser_active := false
+var _side_laser_last_valid_ms := -1
+var _side_laser_last_anchor_uv := Vector2.ZERO
+var _side_laser_last_direction := 1.0
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -191,15 +188,14 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	_recognition_pending = false
 	gesture_engine.process_observations(observations, timestamp_ms)
 	var hand_poses := gesture_engine.get_hand_poses()
-	var kamehameha := _update_kamehameha(hand_poses, timestamp_ms)
+	var side_laser := _update_side_laser(hand_poses, timestamp_ms)
 
-	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateKamehamehaState"):
-		particles_layer.UpdateKamehamehaState(
-			bool(kamehameha.get("active", false)),
-			kamehameha.get("left", Vector2.ZERO),
-			kamehameha.get("right", Vector2.ZERO),
-			kamehameha.get("anchor", Vector2.ZERO),
-			float(kamehameha.get("strength", 0.0)),
+	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateSideLaserState"):
+		particles_layer.UpdateSideLaserState(
+			bool(side_laser.get("active", false)),
+			side_laser.get("anchor", Vector2.ZERO),
+			float(side_laser.get("direction", 1.0)),
+			float(side_laser.get("strength", 0.0)),
 		)
 
 	var detections := gesture_engine.get_active_detections(timestamp_ms)
@@ -238,11 +234,11 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 	if dev_mode_toggled:
 		hand_overlay.show_hand_poses(hand_poses, _rgb_frame_size)
-		gesture_status_label.visible = (not detections.is_empty()) or bool(kamehameha.get("active", false))
+		gesture_status_label.visible = (not detections.is_empty()) or bool(side_laser.get("active", false))
 		if gesture_status_label.visible:
 			var messages: Array[String] = []
-			if bool(kamehameha.get("active", false)):
-				messages.append("KAMEHAMEHA FINAL SIDE (%.0f%%)" % [float(kamehameha.get("strength", 0.0)) * 100.0])
+			if bool(side_laser.get("active", false)):
+				messages.append("SIDE LASER (%.0f%%)" % [float(side_laser.get("strength", 0.0)) * 100.0])
 			for detection in detections:
 				messages.append(
 					"#%d %s (%.0f%%)"
@@ -253,119 +249,86 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		gesture_status_label.visible = false
 
 
-func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary:
+func _update_side_laser(poses: Array[HandPose], timestamp_ms: int) -> Dictionary:
 	var result := {
 		"active": false,
-		"left": Vector2.ZERO,
-		"right": Vector2.ZERO,
 		"anchor": Vector2.ZERO,
+		"direction": 1.0,
 		"strength": 0.0,
 	}
 
-	var open_hands: Array[HandPose] = []
+	var best_pose: HandPose = null
+	var best_score := -INF
+	var best_direction := 1.0
+
 	for pose in poses:
-		if pose != null and _is_open_hand(pose):
-			open_hands.append(pose)
+		if pose == null or pose.landmarks_2d.size() < 21:
+			continue
 
-	if open_hands.size() >= 2:
-		var hand_a: HandPose = null
-		var hand_b: HandPose = null
-		var best_distance := INF
-		for i in range(open_hands.size() - 1):
-			for j in range(i + 1, open_hands.size()):
-				var a := open_hands[i]
-				var b := open_hands[j]
-				if (
-					a.handedness != HandPose.UNKNOWN_HAND
-					and b.handedness != HandPose.UNKNOWN_HAND
-					and a.handedness == b.handedness
-				):
-					continue
-				var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
-				var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
-				if normalized_distance < best_distance:
-					best_distance = normalized_distance
-					hand_a = a
-					hand_b = b
+		var palm_x := pose.palm_center_uv.x
+		var on_left_side := palm_x <= side_laser_zone_x
+		var on_right_side := palm_x >= 1.0 - side_laser_zone_x
+		if not on_left_side and not on_right_side:
+			continue
 
-		if hand_a == null or hand_b == null:
-			for i in range(open_hands.size() - 1):
-				for j in range(i + 1, open_hands.size()):
-					var a := open_hands[i]
-					var b := open_hands[j]
-					var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
-					var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
-					if normalized_distance < best_distance:
-						best_distance = normalized_distance
-						hand_a = a
-						hand_b = b
+		var pose_score := _side_laser_hand_score(pose)
+		if pose_score <= 0.0:
+			continue
 
-		if hand_a != null and hand_b != null:
-			var left_hand := hand_a
-			var right_hand := hand_b
-			if hand_a.handedness == &"RIGHT" and hand_b.handedness == &"LEFT":
-				left_hand = hand_b
-				right_hand = hand_a
-			elif hand_a.handedness == HandPose.UNKNOWN_HAND or hand_b.handedness == HandPose.UNKNOWN_HAND:
-				if hand_a.palm_center_uv.x > hand_b.palm_center_uv.x:
-					left_hand = hand_b
-					right_hand = hand_a
+		# On favorise la main la plus proche du bord de l'image.
+		var edge_bonus := (0.5 - palm_x) if on_left_side else (palm_x - 0.5)
+		var total_score := pose_score + edge_bonus * 0.35
+		if total_score > best_score:
+			best_score = total_score
+			best_pose = pose
+			best_direction = -1.0 if on_left_side else 1.0
 
-			var center := (left_hand.palm_center_uv + right_hand.palm_center_uv) * 0.5
-			var average_scale := maxf((left_hand.palm_scale_uv + right_hand.palm_scale_uv) * 0.5, 0.02)
-			var normalized_distance := left_hand.palm_center_uv.distance_to(right_hand.palm_center_uv) / average_scale
-			var on_left_side := center.x <= kamehameha_side_zone_x
-			var on_right_side := center.x >= 1.0 - kamehameha_side_zone_x
-			var in_side_zone := on_left_side or on_right_side
-			var hands_grouped := normalized_distance <= kamehameha_final_join_distance_palms
+	if best_pose != null:
+		var points := best_pose.landmarks_2d
+		# Le laser part du centre des quatre bouts de doigts.
+		var anchor := (points[8] + points[12] + points[16] + points[20]) * 0.25
+		_side_laser_active = true
+		_side_laser_last_valid_ms = timestamp_ms
+		_side_laser_last_anchor_uv = anchor
+		_side_laser_last_direction = best_direction
 
-			if in_side_zone and hands_grouped:
-				_kamehameha_active = true
-				_kamehameha_last_valid_ms = timestamp_ms
-				_kamehameha_last_left_uv = left_hand.palm_center_uv
-				_kamehameha_last_right_uv = right_hand.palm_center_uv
-				_kamehameha_last_anchor_uv = center
-				result["active"] = true
-				result["left"] = _kamehameha_last_left_uv
-				result["right"] = _kamehameha_last_right_uv
-				result["anchor"] = _kamehameha_last_anchor_uv
-				result["strength"] = 1.0
-				return result
-
-	# Grace period: keep the effect alive briefly after a transient miss.
-	if (
-		_kamehameha_active
-		and _kamehameha_last_valid_ms >= 0
-		and timestamp_ms - _kamehameha_last_valid_ms <= kamehameha_hold_grace_ms
-	):
 		result["active"] = true
-		result["left"] = _kamehameha_last_left_uv
-		result["right"] = _kamehameha_last_right_uv
-		result["anchor"] = _kamehameha_last_anchor_uv
-		result["strength"] = 1.0
+		result["anchor"] = anchor
+		result["direction"] = best_direction
+		result["strength"] = clampf(best_score, 0.65, 1.0)
 		return result
 
-	_kamehameha_active = false
-	_kamehameha_last_valid_ms = -1
+	# Stabilisation : une perte de quelques frames ne coupe pas instantanement le rayon.
+	if (
+		_side_laser_active
+		and _side_laser_last_valid_ms >= 0
+		and timestamp_ms - _side_laser_last_valid_ms <= side_laser_hold_grace_ms
+	):
+		result["active"] = true
+		result["anchor"] = _side_laser_last_anchor_uv
+		result["direction"] = _side_laser_last_direction
+		result["strength"] = 0.85
+		return result
+
+	_side_laser_active = false
+	_side_laser_last_valid_ms = -1
 	return result
 
 
-func _is_open_hand(pose: HandPose) -> bool:
-	# MediaPipe fournit 21 landmarks. On demande seulement que la main soit clairement ouverte :
-	# au moins 3 des 4 grands doigts doivent etre droits et deployes.
-	if pose.landmarks_2d.size() < 21:
-		return false
-
+func _side_laser_hand_score(pose: HandPose) -> float:
+	# Pose visee : une seule main avec les grandes phalanges encore deployees,
+	# mais les extremites des doigts repliees vers l'avant (aspect "crochet/canon").
 	var points := pose.landmarks_2d
 	var palm := pose.palm_center_uv
 	var scale := maxf(pose.palm_scale_uv, 0.001)
-	var extended_count := 0
+	var bent_count := 0
+	var score_sum := 0.0
 
 	var fingers := [
-		[5, 6, 7, 8],   # index
-		[9, 10, 11, 12], # majeur
-		[13, 14, 15, 16], # annulaire
-		[17, 18, 19, 20], # auriculaire
+		[5, 6, 7, 8],
+		[9, 10, 11, 12],
+		[13, 14, 15, 16],
+		[17, 18, 19, 20],
 	]
 
 	for finger in fingers:
@@ -373,17 +336,23 @@ func _is_open_hand(pose: HandPose) -> bool:
 		var pip: Vector2 = points[finger[1]]
 		var dip: Vector2 = points[finger[2]]
 		var tip: Vector2 = points[finger[3]]
-
 		var pip_angle := _joint_angle_degrees(mcp, pip, dip)
 		var dip_angle := _joint_angle_degrees(pip, dip, tip)
 		var tip_reach := tip.distance_to(palm) / scale
-		var pip_reach := pip.distance_to(palm) / scale
 
-		# Seuils volontairement permissifs pour rendre le geste facile a declencher.
-		if pip_angle >= 135.0 and dip_angle >= 135.0 and tip_reach > pip_reach + 0.18:
-			extended_count += 1
+		# PIP reste relativement deploye, DIP se replie : on detecte surtout
+		# la partie haute du doigt penchee plutot qu'un poing ferme.
+		var upper_finger_bent := pip_angle >= 105.0 and dip_angle <= side_laser_max_tip_joint_angle
+		var not_a_fist := tip_reach >= side_laser_min_tip_reach
+		if upper_finger_bent and not_a_fist:
+			bent_count += 1
+			var bend_strength := clampf((side_laser_max_tip_joint_angle - dip_angle) / 55.0, 0.0, 1.0)
+			score_sum += 0.55 + bend_strength * 0.45
 
-	return extended_count >= 3
+	if bent_count < side_laser_min_bent_fingers:
+		return 0.0
+
+	return clampf(score_sum / float(maxi(bent_count, 1)), 0.0, 1.0)
 
 
 func _joint_angle_degrees(a: Vector2, b: Vector2, c: Vector2) -> float:
