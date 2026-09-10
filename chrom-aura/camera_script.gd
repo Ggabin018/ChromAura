@@ -10,6 +10,7 @@ extends Control
 @export_group("Kamehameha")
 @export_range(0.5, 4.0, 0.05) var kamehameha_final_join_distance_palms := 2.10
 @export_range(0.10, 0.45, 0.01) var kamehameha_side_zone_x := 0.34
+@export_range(50, 1000, 10) var kamehameha_hold_grace_ms := 450
 # Pose statique : deux mains ouvertes suffisent pour activer l'effet.
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
@@ -42,6 +43,10 @@ var dev_mode_toggled := false
 var _kamehameha_candidate_since_ms := -1
 var _kamehameha_last_joined_ms := -1
 var _kamehameha_active := false
+var _kamehameha_last_valid_ms := -1
+var _kamehameha_last_left_uv := Vector2.ZERO
+var _kamehameha_last_right_uv := Vector2.ZERO
+var _kamehameha_last_anchor_uv := Vector2.ZERO
 var _kamehameha_pair_ids := Vector2i(-1, -1)
 
 func _ready() -> void:
@@ -248,7 +253,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		gesture_status_label.visible = false
 
 
-func _update_kamehameha(poses: Array[HandPose], _timestamp_ms: int) -> Dictionary:
+func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary:
 	var result := {
 		"active": false,
 		"left": Vector2.ZERO,
@@ -257,45 +262,25 @@ func _update_kamehameha(poses: Array[HandPose], _timestamp_ms: int) -> Dictionar
 		"strength": 0.0,
 	}
 
-	# Version finale laterale : aucun mouvement n'est demande.
-	# Le Kamehameha s'active si deux mains ouvertes forment la pose finale
-	# et si cette pose est clairement situee sur le cote gauche ou droit de l'image.
 	var open_hands: Array[HandPose] = []
 	for pose in poses:
 		if pose != null and _is_open_hand(pose):
 			open_hands.append(pose)
 
-	if open_hands.size() < 2:
-		_kamehameha_active = false
-		return result
-
-	# On choisit de preference une paire gauche + droite quand possible.
-	var hand_a: HandPose = null
-	var hand_b: HandPose = null
-	var best_distance := INF
-	for i in range(open_hands.size() - 1):
-		for j in range(i + 1, open_hands.size()):
-			var a := open_hands[i]
-			var b := open_hands[j]
-			if (
-				a.handedness != HandPose.UNKNOWN_HAND
-				and b.handedness != HandPose.UNKNOWN_HAND
-				and a.handedness == b.handedness
-			):
-				continue
-			var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
-			var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
-			if normalized_distance < best_distance:
-				best_distance = normalized_distance
-				hand_a = a
-				hand_b = b
-
-	if hand_a == null or hand_b == null:
-		# Fallback : prendre les deux mains ouvertes les plus proches.
+	if open_hands.size() >= 2:
+		var hand_a: HandPose = null
+		var hand_b: HandPose = null
+		var best_distance := INF
 		for i in range(open_hands.size() - 1):
 			for j in range(i + 1, open_hands.size()):
 				var a := open_hands[i]
 				var b := open_hands[j]
+				if (
+					a.handedness != HandPose.UNKNOWN_HAND
+					and b.handedness != HandPose.UNKNOWN_HAND
+					and a.handedness == b.handedness
+				):
+					continue
 				var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
 				var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
 				if normalized_distance < best_distance:
@@ -303,38 +288,65 @@ func _update_kamehameha(poses: Array[HandPose], _timestamp_ms: int) -> Dictionar
 					hand_a = a
 					hand_b = b
 
-	if hand_a == null or hand_b == null:
-		_kamehameha_active = false
+		if hand_a == null or hand_b == null:
+			for i in range(open_hands.size() - 1):
+				for j in range(i + 1, open_hands.size()):
+					var a := open_hands[i]
+					var b := open_hands[j]
+					var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
+					var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
+					if normalized_distance < best_distance:
+						best_distance = normalized_distance
+						hand_a = a
+						hand_b = b
+
+		if hand_a != null and hand_b != null:
+			var left_hand := hand_a
+			var right_hand := hand_b
+			if hand_a.handedness == &"RIGHT" and hand_b.handedness == &"LEFT":
+				left_hand = hand_b
+				right_hand = hand_a
+			elif hand_a.handedness == HandPose.UNKNOWN_HAND or hand_b.handedness == HandPose.UNKNOWN_HAND:
+				if hand_a.palm_center_uv.x > hand_b.palm_center_uv.x:
+					left_hand = hand_b
+					right_hand = hand_a
+
+			var center := (left_hand.palm_center_uv + right_hand.palm_center_uv) * 0.5
+			var average_scale := maxf((left_hand.palm_scale_uv + right_hand.palm_scale_uv) * 0.5, 0.02)
+			var normalized_distance := left_hand.palm_center_uv.distance_to(right_hand.palm_center_uv) / average_scale
+			var on_left_side := center.x <= kamehameha_side_zone_x
+			var on_right_side := center.x >= 1.0 - kamehameha_side_zone_x
+			var in_side_zone := on_left_side or on_right_side
+			var hands_grouped := normalized_distance <= kamehameha_final_join_distance_palms
+
+			if in_side_zone and hands_grouped:
+				_kamehameha_active = true
+				_kamehameha_last_valid_ms = timestamp_ms
+				_kamehameha_last_left_uv = left_hand.palm_center_uv
+				_kamehameha_last_right_uv = right_hand.palm_center_uv
+				_kamehameha_last_anchor_uv = center
+				result["active"] = true
+				result["left"] = _kamehameha_last_left_uv
+				result["right"] = _kamehameha_last_right_uv
+				result["anchor"] = _kamehameha_last_anchor_uv
+				result["strength"] = 1.0
+				return result
+
+	# Grace period: keep the effect alive briefly after a transient miss.
+	if (
+		_kamehameha_active
+		and _kamehameha_last_valid_ms >= 0
+		and timestamp_ms - _kamehameha_last_valid_ms <= kamehameha_hold_grace_ms
+	):
+		result["active"] = true
+		result["left"] = _kamehameha_last_left_uv
+		result["right"] = _kamehameha_last_right_uv
+		result["anchor"] = _kamehameha_last_anchor_uv
+		result["strength"] = 1.0
 		return result
 
-	var left_hand := hand_a
-	var right_hand := hand_b
-	if hand_a.handedness == &"RIGHT" and hand_b.handedness == &"LEFT":
-		left_hand = hand_b
-		right_hand = hand_a
-	elif hand_a.handedness == HandPose.UNKNOWN_HAND or hand_b.handedness == HandPose.UNKNOWN_HAND:
-		if hand_a.palm_center_uv.x > hand_b.palm_center_uv.x:
-			left_hand = hand_b
-			right_hand = hand_a
-
-	var center := (left_hand.palm_center_uv + right_hand.palm_center_uv) * 0.5
-	var average_scale := maxf((left_hand.palm_scale_uv + right_hand.palm_scale_uv) * 0.5, 0.02)
-	var normalized_distance := left_hand.palm_center_uv.distance_to(right_hand.palm_center_uv) / average_scale
-	var on_left_side := center.x <= kamehameha_side_zone_x
-	var on_right_side := center.x >= 1.0 - kamehameha_side_zone_x
-	var in_side_zone := on_left_side or on_right_side
-	var hands_grouped := normalized_distance <= kamehameha_final_join_distance_palms
-
-	if not in_side_zone or not hands_grouped:
-		_kamehameha_active = false
-		return result
-
-	_kamehameha_active = true
-	result["active"] = true
-	result["left"] = left_hand.palm_center_uv
-	result["right"] = right_hand.palm_center_uv
-	result["anchor"] = center
-	result["strength"] = 1.0
+	_kamehameha_active = false
+	_kamehameha_last_valid_ms = -1
 	return result
 
 
