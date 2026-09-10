@@ -24,6 +24,7 @@ public sealed class BodyDetector
 
 	private readonly List<TrackedBody> _trackedBodies = new();
 	private int _nextBodyId;
+	private double _lastFrameTimeSeconds;
 
 	// Tampons préalloués pour éviter les allocations mémoire par trame
 	private float[] _depthGrid = Array.Empty<float>();
@@ -65,6 +66,11 @@ public sealed class BodyDetector
 
 		var width = depthImage.GetWidth();
 		var height = depthImage.GetHeight();
+		var nowSeconds = Time.GetTicksMsec() / 1000.0;
+		var frameDelta = _lastFrameTimeSeconds > 0.0
+			? Mathf.Clamp((float)(nowSeconds - _lastFrameTimeSeconds), 1.0f / 120.0f, 0.2f)
+			: 1.0f / 30.0f;
+		_lastFrameTimeSeconds = nowSeconds;
 
 		var stride = Mathf.Max(1, clusterStride);
 		var gw = width / stride;
@@ -265,6 +271,11 @@ public sealed class BodyDetector
 				// Corps existant retrouvé : mise à jour douce du centroïde
 				matchedTrackedIndices.Add(bestMatchIndex);
 				var body = _trackedBodies[bestMatchIndex];
+				var rawVelocity = (centroid - body.Centroid) / frameDelta;
+				// Les sauts de tracking ne doivent jamais provoquer une rafale artificielle.
+				if (rawVelocity.Length() > 1200.0f)
+					rawVelocity = rawVelocity.Normalized() * 1200.0f;
+				body.Velocity = body.Velocity.Lerp(rawVelocity, 0.25f);
 				body.Centroid = body.Centroid.Lerp(centroid, 0.35f);
 				body.BoundingBox = clusterBounds;
 				body.AvgDepth = avgDepth;
@@ -301,6 +312,7 @@ public sealed class BodyDetector
 					Centroid = centroid,
 					BoundingBox = clusterBounds,
 					AvgDepth = avgDepth,
+					Velocity = Vector2.Zero,
 					PixelCount = cluster.PixelCount,
 					MissedFrames = 0,
 					IsPointing = false
@@ -318,6 +330,7 @@ public sealed class BodyDetector
 		{
 			if (!matchedTrackedIndices.Contains(t))
 			{
+				_trackedBodies[t].Velocity *= 0.78f;
 				_trackedBodies[t].MissedFrames++;
 				if (_trackedBodies[t].MissedFrames > maxMissedFrames)
 				{

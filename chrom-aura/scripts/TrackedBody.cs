@@ -22,6 +22,9 @@ public sealed class TrackedBody
 	/// <summary>Profondeur moyenne mesurée pour ce corps (valeur normalisée de 0.0 à 1.0).</summary>
 	public float AvgDepth { get; set; }
 
+	/// <summary>Vélocité lissée du centroïde dans l'espace masque, en pixels par seconde.</summary>
+	public Vector2 Velocity { get; internal set; }
+
 	/// <summary>Nombre de cellules de la grille de profondeur constituant ce corps.</summary>
 	public int PixelCount { get; set; }
 

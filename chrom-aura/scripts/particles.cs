@@ -65,6 +65,36 @@ public partial class particles : CanvasLayer
 	/// <summary>Capacité maximale du pool de tracé pour une palette.</summary>
 	[Export] public int MaxTrailParticles { get; set; } = 25000;
 
+	[ExportGroup("Lucioles ambiantes")]
+	/// <summary>Nombre de lucioles permanentes affichées dans le fond.</summary>
+	[Export] public int AmbientParticleCount { get; set; } = 250;
+
+	/// <summary>Vitesse de dérive naturelle des lucioles en pixels par seconde.</summary>
+	[Export] public float AmbientParticleSpeed { get; set; } = 12.0f;
+
+	/// <summary>Distance d'influence de la silhouette autour de son masque, en pixels écran.</summary>
+	[Export] public float AmbientInfluenceRadius { get; set; } = 48.0f;
+
+	/// <summary>Force avec laquelle le contour de la silhouette repousse les lucioles.</summary>
+	[Export] public float AmbientRepulsionStrength { get; set; } = 82.0f;
+
+	/// <summary>Proportion du mouvement corporel transmise aux lucioles proches.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientBodyWindInfluence { get; set; } = 0.25f;
+
+	/// <summary>Diamètre minimal d'une luciole en pixels.</summary>
+	[Export] public float AmbientParticleSizeMin { get; set; } = 3.0f;
+
+	/// <summary>Diamètre maximal d'une luciole en pixels.</summary>
+	[Export] public float AmbientParticleSizeMax { get; set; } = 8.0f;
+
+	/// <summary>Multiplicateur de vitesse du scintillement.</summary>
+	[Export] public float AmbientTwinkleSpeed { get; set; } = 1.0f;
+
+	/// <summary>Opacité maximale des lucioles.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientParticleOpacity { get; set; } = 0.34f;
+
 	[ExportGroup("Détection et Interaction")]
 	/// <summary>Rayon d'influence (pixels masque) autour d'un doigt pointé pour émettre des particules de tracé.</summary>
 	[Export] public float HandPersistentRadius { get; set; } = 45.0f;
@@ -135,6 +165,7 @@ public partial class particles : CanvasLayer
 	private readonly GunParticleManager _gunParticleManager = new();
 	private readonly List<Vector2> _smoothedFingerPos = new();
 
+	private AmbientFireflies _ambientFireflies = null!;
 	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
 	private float _emissionRemainder;
@@ -157,6 +188,23 @@ public partial class particles : CanvasLayer
 	public override void _Ready()
 	{
 		_random.Randomize();
+
+		// Le premier enfant du CanvasLayer reste derrière toutes les particules corporelles.
+		_ambientFireflies = new AmbientFireflies
+		{
+			ParticleCount = AmbientParticleCount,
+			AmbientSpeed = AmbientParticleSpeed,
+			InfluenceRadius = AmbientInfluenceRadius,
+			RepulsionStrength = AmbientRepulsionStrength,
+			BodyWindInfluence = AmbientBodyWindInfluence,
+			ParticleSizeMin = AmbientParticleSizeMin,
+			ParticleSizeMax = AmbientParticleSizeMax,
+			TwinkleSpeed = AmbientTwinkleSpeed,
+			AmbientOpacity = AmbientParticleOpacity,
+			PreserveAspectRatio = PreserveAspectRatio,
+		};
+		AddChild(_ambientFireflies);
+		_ambientFireflies.Initialize(AdditiveBlending);
 
 		var palettes = BodyPalette.DefaultPalettes;
 		for (var i = 0; i < palettes.Length; i++)
@@ -351,6 +399,12 @@ public partial class particles : CanvasLayer
 			BodyPalette.DefaultPalettes.Length,
 			_random,
 			_maskPoints
+		);
+
+		_ambientFireflies.UpdateSilhouette(
+			_maskPoints,
+			_bodyDetector.TrackedBodies,
+			_maskSize
 		);
 
 		// Signal si le nombre de corps a évolué
