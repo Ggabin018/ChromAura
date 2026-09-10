@@ -4,7 +4,7 @@ extends Control
 ## Manages floating neon hearts spawned by heart hand gestures.
 ## Uses additive blending for vibrant neon glow effects.
 
-@export var heart_texture: Texture2D = preload("res://assets/neon_heart.png")
+@export var heart_texture: Texture2D
 @export_range(0.02, 0.50, 0.01) var spawn_interval: float = 0.11
 @export_range(50.0, 600.0, 10.0) var min_speed: float = 160.0
 @export_range(50.0, 800.0, 10.0) var max_speed: float = 290.0
@@ -49,6 +49,9 @@ func _ready() -> void:
 	_material_add = CanvasItemMaterial.new()
 	_material_add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	material = _material_add
+
+	if heart_texture == null and ResourceLoader.exists("res://assets/neon_heart.png"):
+		heart_texture = load("res://assets/neon_heart.png")
 
 
 func update_heart_state(anchors: Array[Dictionary]) -> void:
