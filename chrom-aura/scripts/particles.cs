@@ -65,6 +65,49 @@ public partial class particles : CanvasLayer
 	/// <summary>Capacité maximale du pool de tracé pour une palette.</summary>
 	[Export] public int MaxTrailParticles { get; set; } = 25000;
 
+	[ExportGroup("Lucioles ambiantes")]
+	/// <summary>Nombre de lucioles permanentes affichées dans le fond.</summary>
+	[Export] public int AmbientParticleCount { get; set; } = 1000;
+
+	/// <summary>Vitesse de dérive naturelle des lucioles en pixels par seconde.</summary>
+	[Export] public float AmbientParticleSpeed { get; set; } = 12.0f;
+
+	/// <summary>Distance d'influence de la silhouette autour de son masque, en pixels écran.</summary>
+	[Export] public float AmbientInfluenceRadius { get; set; } = 48.0f;
+
+	/// <summary>Force avec laquelle le contour de la silhouette repousse les lucioles.</summary>
+	[Export] public float AmbientRepulsionStrength { get; set; } = 110.0f;
+
+	/// <summary>Proportion du mouvement corporel transmise aux lucioles proches.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientBodyWindInfluence { get; set; } = 0.25f;
+
+	/// <summary>Diamètre minimal d'une luciole en pixels.</summary>
+	[Export] public float AmbientParticleSizeMin { get; set; } = 3.0f;
+
+	/// <summary>Diamètre maximal d'une luciole en pixels.</summary>
+	[Export] public float AmbientParticleSizeMax { get; set; } = 8.0f;
+
+	/// <summary>Multiplicateur de vitesse du scintillement.</summary>
+	[Export] public float AmbientTwinkleSpeed { get; set; } = 1.0f;
+
+	/// <summary>Force maximale de rappel vers la répartition uniforme.</summary>
+	[Export] public float AmbientReturnStrength { get; set; } = 0.22f;
+
+	/// <summary>Part du rappel conservée lorsqu'au moins une silhouette est visible.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientReturnWhileBodies { get; set; } = 0.35f;
+
+	/// <summary>Amplitude du mouvement libre autour de l'ancre de chaque luciole, en pixels.</summary>
+	[Export] public float AmbientAnchorWanderRadius { get; set; } = 18.0f;
+
+	/// <summary>Délai avant le retour aux ancres après la disparition de la dernière silhouette.</summary>
+	[Export] public float AmbientReturnDelay { get; set; } = 0.4f;
+
+	/// <summary>Opacité maximale des lucioles.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientParticleOpacity { get; set; } = 0.75f;
+
 	[ExportGroup("Détection et Interaction")]
 	/// <summary>Rayon d'influence (pixels masque) autour d'un doigt pointé pour émettre des particules de tracé.</summary>
 	[Export] public float HandPersistentRadius { get; set; } = 45.0f;
@@ -135,6 +178,7 @@ public partial class particles : CanvasLayer
 	private readonly GunParticleManager _gunParticleManager = new();
 	private readonly List<Vector2> _smoothedFingerPos = new();
 
+	private AmbientFireflies _ambientFireflies = null!;
 	private BodyDebugOverlay _debugOverlay = null!;
 	private Vector2I _maskSize = new(640, 480);
 	private float _emissionRemainder;
@@ -157,6 +201,27 @@ public partial class particles : CanvasLayer
 	public override void _Ready()
 	{
 		_random.Randomize();
+
+		// Le premier enfant du CanvasLayer reste derrière toutes les particules corporelles.
+		_ambientFireflies = new AmbientFireflies
+		{
+			ParticleCount = AmbientParticleCount,
+			AmbientSpeed = AmbientParticleSpeed,
+			InfluenceRadius = AmbientInfluenceRadius,
+			RepulsionStrength = AmbientRepulsionStrength,
+			BodyWindInfluence = AmbientBodyWindInfluence,
+			ParticleSizeMin = AmbientParticleSizeMin,
+			ParticleSizeMax = AmbientParticleSizeMax,
+			TwinkleSpeed = AmbientTwinkleSpeed,
+			ReturnStrength = AmbientReturnStrength,
+			ReturnWhileBodies = AmbientReturnWhileBodies,
+			AnchorWanderRadius = AmbientAnchorWanderRadius,
+			ReturnDelay = AmbientReturnDelay,
+			AmbientOpacity = AmbientParticleOpacity,
+			PreserveAspectRatio = PreserveAspectRatio,
+		};
+		AddChild(_ambientFireflies);
+		_ambientFireflies.Initialize(AdditiveBlending);
 
 		var palettes = BodyPalette.DefaultPalettes;
 		for (var i = 0; i < palettes.Length; i++)
@@ -351,6 +416,12 @@ public partial class particles : CanvasLayer
 			BodyPalette.DefaultPalettes.Length,
 			_random,
 			_maskPoints
+		);
+
+		_ambientFireflies.UpdateSilhouette(
+			_maskPoints,
+			_bodyDetector.TrackedBodies,
+			_maskSize
 		);
 
 		// Signal si le nombre de corps a évolué
