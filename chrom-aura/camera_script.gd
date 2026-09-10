@@ -7,6 +7,13 @@ extends Control
 @export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.5
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
+@export_group("Kamehameha")
+@export_range(0.5, 4.0, 0.05) var kamehameha_join_distance_palms := 1.75
+@export_range(50, 1000, 10) var kamehameha_charge_ms := 220
+@export_range(50, 800, 10) var kamehameha_release_grace_ms := 180
+@export_range(0.0, 1.0, 0.05) var kamehameha_same_motion_dot := 0.55
+@export_range(0.0, 3.0, 0.05) var kamehameha_motion_threshold := 0.08
+
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
 @onready var hand_overlay: HandOverlay = $HandDetectionLayer/HandOverlay
 @onready var gesture_engine: HandGestureEngine = $HandGestureEngine
@@ -33,6 +40,11 @@ var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
+
+var _kamehameha_candidate_since_ms := -1
+var _kamehameha_last_joined_ms := -1
+var _kamehameha_active := false
+var _kamehameha_pair_ids := Vector2i(-1, -1)
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -175,6 +187,17 @@ func _on_hand_result(
 func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int) -> void:
 	_recognition_pending = false
 	gesture_engine.process_observations(observations, timestamp_ms)
+	var hand_poses := gesture_engine.get_hand_poses()
+	var kamehameha := _update_kamehameha(hand_poses, timestamp_ms)
+
+	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateKamehamehaState"):
+		particles_layer.UpdateKamehamehaState(
+			bool(kamehameha.get("active", false)),
+			kamehameha.get("left", Vector2.ZERO),
+			kamehameha.get("right", Vector2.ZERO),
+			kamehameha.get("anchor", Vector2.ZERO),
+			float(kamehameha.get("strength", 0.0)),
+		)
 
 	var detections := gesture_engine.get_active_detections(timestamp_ms)
 	var pointing_fingers: Array[Vector2] = []
@@ -211,10 +234,12 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 		audio_manager.set_drawing(is_pointing)
 
 	if dev_mode_toggled:
-		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
-		gesture_status_label.visible = not detections.is_empty()
+		hand_overlay.show_hand_poses(hand_poses, _rgb_frame_size)
+		gesture_status_label.visible = (not detections.is_empty()) or bool(kamehameha.get("active", false))
 		if gesture_status_label.visible:
 			var messages: Array[String] = []
+			if bool(kamehameha.get("active", false)):
+				messages.append("KAMEHAMEHA (%.0f%%)" % [float(kamehameha.get("strength", 0.0)) * 100.0])
 			for detection in detections:
 				messages.append(
 					"#%d %s (%.0f%%)"
@@ -223,6 +248,90 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 			gesture_status_label.text = "  |  ".join(messages)
 	else:
 		gesture_status_label.visible = false
+
+
+func _update_kamehameha(poses: Array[HandPose], timestamp_ms: int) -> Dictionary:
+	var result := {
+		"active": false,
+		"left": Vector2.ZERO,
+		"right": Vector2.ZERO,
+		"anchor": Vector2.ZERO,
+		"strength": 0.0,
+	}
+	if poses.size() < 2:
+		_update_kamehameha_release(timestamp_ms)
+		return result
+
+	var best_a: HandPose = null
+	var best_b: HandPose = null
+	var best_normalized_distance := INF
+	for i in range(poses.size() - 1):
+		for j in range(i + 1, poses.size()):
+			var a := poses[i]
+			var b := poses[j]
+			if a == null or b == null:
+				continue
+			if (
+				a.handedness != HandPose.UNKNOWN_HAND
+				and b.handedness != HandPose.UNKNOWN_HAND
+				and a.handedness == b.handedness
+			):
+				continue
+			var average_scale := maxf((a.palm_scale_uv + b.palm_scale_uv) * 0.5, 0.02)
+			var normalized_distance := a.palm_center_uv.distance_to(b.palm_center_uv) / average_scale
+			if normalized_distance < best_normalized_distance:
+				best_normalized_distance = normalized_distance
+				best_a = a
+				best_b = b
+
+	if best_a == null or best_b == null or best_normalized_distance > kamehameha_join_distance_palms:
+		_update_kamehameha_release(timestamp_ms)
+		return result
+
+	var ids := Vector2i(mini(best_a.track_id, best_b.track_id), maxi(best_a.track_id, best_b.track_id))
+	if ids != _kamehameha_pair_ids:
+		_kamehameha_pair_ids = ids
+		_kamehameha_candidate_since_ms = timestamp_ms
+		_kamehameha_active = false
+
+	_kamehameha_last_joined_ms = timestamp_ms
+	if _kamehameha_candidate_since_ms < 0:
+		_kamehameha_candidate_since_ms = timestamp_ms
+	if not _kamehameha_active and timestamp_ms - _kamehameha_candidate_since_ms >= kamehameha_charge_ms:
+		_kamehameha_active = true
+
+	var velocity_a := best_a.velocity_uv
+	var velocity_b := best_b.velocity_uv
+	var speed_a := velocity_a.length()
+	var speed_b := velocity_b.length()
+	var same_motion := 1.0
+	if speed_a > kamehameha_motion_threshold and speed_b > kamehameha_motion_threshold:
+		same_motion = clampf(velocity_a.normalized().dot(velocity_b.normalized()), -1.0, 1.0)
+		if same_motion < kamehameha_same_motion_dot:
+			_kamehameha_active = false
+			_kamehameha_candidate_since_ms = timestamp_ms
+
+	var center := (best_a.palm_center_uv + best_b.palm_center_uv) * 0.5
+	var average_speed := (speed_a + speed_b) * 0.5
+	var charge_progress := clampf(float(timestamp_ms - _kamehameha_candidate_since_ms) / maxf(float(kamehameha_charge_ms), 1.0), 0.0, 1.0)
+	var motion_strength := clampf(average_speed / 0.65, 0.0, 1.0)
+	var strength := clampf(maxf(charge_progress * 0.65, motion_strength), 0.0, 1.0)
+
+	result["active"] = _kamehameha_active
+	result["left"] = best_a.palm_center_uv
+	result["right"] = best_b.palm_center_uv
+	result["anchor"] = center
+	result["strength"] = strength
+	return result
+
+
+func _update_kamehameha_release(timestamp_ms: int) -> void:
+	if _kamehameha_last_joined_ms >= 0 and timestamp_ms - _kamehameha_last_joined_ms < kamehameha_release_grace_ms:
+		return
+	_kamehameha_active = false
+	_kamehameha_candidate_since_ms = -1
+	_kamehameha_last_joined_ms = -1
+	_kamehameha_pair_ids = Vector2i(-1, -1)
 
 
 func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:

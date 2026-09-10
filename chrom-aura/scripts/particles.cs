@@ -42,6 +42,19 @@ public partial class particles : CanvasLayer
 		set => _gunParticleManager.ProjectileSpeedMax = value;
 	}
 
+	[ExportGroup("Kamehameha")]
+	/// <summary>Durée de vie du ruban énergétique du Kamehameha.</summary>
+	[Export] public float KamehamehaLifetime { get; set; } = 1.35f;
+
+	/// <summary>Nombre maximal de particules du Kamehameha.</summary>
+	[Export] public int MaxKamehamehaParticles { get; set; } = 45000;
+
+	/// <summary>Espacement entre les particules le long du déplacement, en pixels écran.</summary>
+	[Export] public float KamehamehaTrailSpacing { get; set; } = 2.2f;
+
+	/// <summary>Rayon de la boule d'énergie formée entre les deux mains.</summary>
+	[Export] public float KamehamehaChargeRadius { get; set; } = 18.0f;
+
 	[ExportGroup("Durées de vie")]
 	/// <summary>Durée de vie (secondes) des particules de tracé de dessin persistant.</summary>
 	[Export] public float TrailLifetime { get; set; } = 8.0f;
@@ -175,6 +188,15 @@ public partial class particles : CanvasLayer
 	private readonly GpuParticles2D[] _trailCoreParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _trailSparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
+	private GpuParticles2D _kamehamehaCoreSystem = null!;
+	private GpuParticles2D _kamehamehaSparkSystem = null!;
+	private readonly Vector2[] _kamehamehaCurrent = new Vector2[3];
+	private readonly Vector2[] _kamehamehaPrevious = new Vector2[3];
+	private bool _kamehamehaHasPrevious;
+	private bool _kamehamehaActive;
+	private float _kamehamehaStrength;
+	private double _lastKamehamehaUpdateTime = 999.0;
+
 	private readonly GunParticleManager _gunParticleManager = new();
 	private readonly List<Vector2> _smoothedFingerPos = new();
 
@@ -239,6 +261,11 @@ public partial class particles : CanvasLayer
 			AddChild(_trailSparkleParticleSystems[i]);
 		}
 
+		_kamehamehaCoreSystem = CreateKamehamehaCoreParticleSystem();
+		AddChild(_kamehamehaCoreSystem);
+		_kamehamehaSparkSystem = CreateKamehamehaSparkParticleSystem();
+		AddChild(_kamehamehaSparkSystem);
+
 		// Initialisation du gestionnaire de particules pistolet
 		_gunParticleManager.Initialize(
 			this,
@@ -271,6 +298,16 @@ public partial class particles : CanvasLayer
 		{
 			_prevFingerScreenPos.Clear();
 			_smoothedFingerPos.Clear();
+		}
+
+		_lastKamehamehaUpdateTime += delta;
+		if (_kamehamehaActive && _lastKamehamehaUpdateTime < 0.35)
+		{
+			EmitKamehamehaTrail();
+		}
+		else
+		{
+			_kamehamehaHasPrevious = false;
 		}
 
 		// 1.5. Émission des tirs de particules pour le geste pistolet (Finger Gun)
@@ -357,6 +394,21 @@ public partial class particles : CanvasLayer
 		);
 
 		_lastFingerUpdateTime = 0.0;
+	}
+
+	/// <summary>
+	/// Met à jour le Kamehameha à deux mains. Les positions sont normalisées dans l'image MediaPipe.
+	/// </summary>
+	public void UpdateKamehamehaState(bool active, Vector2 leftHand, Vector2 rightHand, Vector2 anchor, float strength)
+	{
+		_kamehamehaActive = active;
+		_kamehamehaCurrent[0] = leftHand;
+		_kamehamehaCurrent[1] = rightHand;
+		_kamehamehaCurrent[2] = anchor;
+		_kamehamehaStrength = Mathf.Clamp(strength, 0.0f, 1.0f);
+		_lastKamehamehaUpdateTime = 0.0;
+		if (!active)
+			_kamehamehaHasPrevious = false;
 	}
 
 	/// <summary>
@@ -508,6 +560,88 @@ public partial class particles : CanvasLayer
 			new Transform2D(0.0f, screenPos + RandomOffset(0.8f)),
 			mistDrift,
 			mistColor,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+	}
+
+	private void EmitKamehamehaTrail()
+	{
+		var current = new Vector2[3];
+		for (var i = 0; i < 3; i++)
+			current[i] = NormalizedToScreen(_kamehamehaCurrent[i]);
+
+		if (!_kamehamehaHasPrevious)
+		{
+			for (var i = 0; i < 3; i++)
+				_kamehamehaPrevious[i] = current[i];
+			_kamehamehaHasPrevious = true;
+		}
+
+		for (var i = 0; i < 3; i++)
+		{
+			var previous = _kamehamehaPrevious[i];
+			var distance = previous.DistanceTo(current[i]);
+			if (distance < 650.0f)
+			{
+				var spacing = Mathf.Max(KamehamehaTrailSpacing, 0.75f);
+				var steps = Mathf.Clamp(Mathf.CeilToInt(distance / spacing), 1, 220);
+				for (var step = 0; step <= steps; step++)
+				{
+					var t = (float)step / steps;
+					var point = previous.Lerp(current[i], t);
+					EmitKamehamehaCore(point, i == 2 ? 1.0f : 0.72f);
+					if (_random.Randf() < 0.16f + _kamehamehaStrength * 0.18f)
+						EmitKamehamehaSpark(point);
+				}
+			}
+			_kamehamehaPrevious[i] = current[i];
+		}
+
+		// Boule d'énergie entre les deux paumes, visible même lorsque les mains restent presque immobiles.
+		var orbCenter = current[2];
+		var orbCount = 10 + Mathf.RoundToInt(18.0f * _kamehamehaStrength);
+		for (var i = 0; i < orbCount; i++)
+		{
+			var angle = _random.RandfRange(0.0f, Mathf.Tau);
+			var radius = _random.RandfRange(0.0f, KamehamehaChargeRadius * (0.65f + 0.55f * _kamehamehaStrength));
+			var offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+			EmitKamehamehaCore(orbCenter + offset, 1.15f);
+			if (_random.Randf() < 0.35f)
+				EmitKamehamehaSpark(orbCenter + offset);
+		}
+	}
+
+	private void EmitKamehamehaCore(Vector2 position, float intensity)
+	{
+		var jitter = RandomOffset(0.9f + _kamehamehaStrength * 1.2f);
+		var drift = RandomOffset(7.0f + _kamehamehaStrength * 10.0f);
+		var blue = new Color(0.18f, 0.68f, 1.0f, 0.98f);
+		var whiteBlue = new Color(0.82f, 0.96f, 1.0f, 1.0f);
+		var color = blue.Lerp(whiteBlue, _random.RandfRange(0.35f, 0.90f));
+		color *= Mathf.Clamp(intensity * EtherealGlowIntensity, 0.6f, 2.2f);
+		color.A = 0.98f;
+		_kamehamehaCoreSystem.ProcessMaterial.Set("color", color);
+		_kamehamehaCoreSystem.EmitParticle(
+			new Transform2D(0.0f, position + jitter),
+			drift,
+			color,
+			Colors.White,
+			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+		);
+	}
+
+	private void EmitKamehamehaSpark(Vector2 position)
+	{
+		var angle = _random.RandfRange(0.0f, Mathf.Tau);
+		var velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle))
+			* _random.RandfRange(18.0f, 70.0f + 50.0f * _kamehamehaStrength);
+		var color = new Color(0.72f, 0.94f, 1.0f, 0.95f);
+		_kamehamehaSparkSystem.ProcessMaterial.Set("color", color);
+		_kamehamehaSparkSystem.EmitParticle(
+			new Transform2D(angle, position + RandomOffset(4.0f)),
+			velocity,
+			color,
 			Colors.White,
 			(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
 		);
@@ -680,6 +814,92 @@ public partial class particles : CanvasLayer
 	// =========================================================================
 	// FABRIQUE DE SYSTÈMES ET MATÉRIAUX GPU
 	// =========================================================================
+
+	private GpuParticles2D CreateKamehamehaCoreParticleSystem()
+	{
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		alphaCurve.AddPoint(new Vector2(0.04f, 1.0f));
+		alphaCurve.AddPoint(new Vector2(0.72f, 0.82f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.55f));
+		scaleCurve.AddPoint(new Vector2(0.10f, 1.15f));
+		scaleCurve.AddPoint(new Vector2(0.75f, 0.82f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 0.18f));
+
+		var gradient = new Gradient();
+		gradient.SetColor(0, new Color(0.90f, 0.98f, 1.0f, 1.0f));
+		gradient.AddPoint(0.35f, new Color(0.30f, 0.78f, 1.0f, 0.98f));
+		gradient.AddPoint(0.82f, new Color(0.05f, 0.35f, 1.0f, 0.68f));
+		gradient.AddPoint(1.0f, new Color(0.03f, 0.16f, 0.9f, 0.0f));
+
+		var processMat = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = Vector3.Zero,
+			DampingMin = 4.0f,
+			DampingMax = 8.0f,
+			ScaleMin = 0.65f,
+			ScaleMax = 1.45f,
+			ScaleCurve = new CurveTexture { Curve = scaleCurve },
+			AlphaCurve = new CurveTexture { Curve = alphaCurve },
+			ColorRamp = new GradientTexture1D { Gradient = gradient },
+			Color = Colors.White,
+		};
+
+		return new GpuParticles2D
+		{
+			Amount = MaxKamehamehaParticles,
+			Lifetime = KamehamehaLifetime,
+			LocalCoords = false,
+			Emitting = false,
+			Texture = CreateTrailGlowTexture(30),
+			ProcessMaterial = processMat,
+			Material = CreateCanvasMaterial(),
+			VisibilityRect = new Rect2(-300, -300, 12000, 12000),
+		};
+	}
+
+	private GpuParticles2D CreateKamehamehaSparkParticleSystem()
+	{
+		var alphaCurve = new Curve();
+		alphaCurve.AddPoint(new Vector2(0.0f, 0.0f));
+		alphaCurve.AddPoint(new Vector2(0.06f, 1.0f));
+		alphaCurve.AddPoint(new Vector2(0.55f, 0.85f));
+		alphaCurve.AddPoint(new Vector2(1.0f, 0.0f));
+
+		var scaleCurve = new Curve();
+		scaleCurve.AddPoint(new Vector2(0.0f, 0.30f));
+		scaleCurve.AddPoint(new Vector2(0.15f, 0.90f));
+		scaleCurve.AddPoint(new Vector2(1.0f, 0.08f));
+
+		var processMat = new ParticleProcessMaterial
+		{
+			ParticleFlagDisableZ = true,
+			Gravity = Vector3.Zero,
+			DampingMin = 2.0f,
+			DampingMax = 4.0f,
+			ScaleMin = 0.30f,
+			ScaleMax = 0.90f,
+			ScaleCurve = new CurveTexture { Curve = scaleCurve },
+			AlphaCurve = new CurveTexture { Curve = alphaCurve },
+			Color = new Color(0.75f, 0.95f, 1.0f, 1.0f),
+		};
+
+		return new GpuParticles2D
+		{
+			Amount = Mathf.Max(6000, MaxKamehamehaParticles / 3),
+			Lifetime = Mathf.Max(0.35f, KamehamehaLifetime * 0.48f),
+			LocalCoords = false,
+			Emitting = false,
+			Texture = CreateTrailSparkleTexture(18),
+			ProcessMaterial = processMat,
+			Material = CreateCanvasMaterial(),
+			VisibilityRect = new Rect2(-300, -300, 12000, 12000),
+		};
+	}
 
 	/// <summary>
 	/// Crée le système de brume douce d'une palette de corps.
