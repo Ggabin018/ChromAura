@@ -58,6 +58,8 @@ func _ready() -> void:
 
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
+	if is_instance_valid(particles_layer) and particles_layer.has_signal("GunShotFired"):
+		particles_layer.connect("GunShotFired", _on_gun_shot_fired)
 	_update_body_debug_ui()
 
 	if _initialize_hand_landmarker():
@@ -176,13 +178,32 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 	var detections := gesture_engine.get_active_detections(timestamp_ms)
 	var pointing_fingers: Array[Vector2] = []
+	var gun_detections: Array[Dictionary] = []
 	for detection in detections:
 		if detection.gesture == HandGestureEngine.INDEX_POINTING:
 			pointing_fingers.append(detection.anchor_uv)
+		elif detection.gesture == HandGestureEngine.FINGER_GUN:
+			gun_detections.append({
+				"track_id": detection.track_id,
+				"anchor": detection.anchor_uv,
+				"direction": detection.direction_uv,
+			})
+		elif detection.gesture == HandGestureEngine.INDEX_MIDDLE_POINTING:
+			if absf(detection.direction_uv.x) >= 0.40:
+				gun_detections.append({
+					"track_id": detection.track_id,
+					"anchor": detection.anchor_uv,
+					"direction": detection.direction_uv,
+				})
+			else:
+				pointing_fingers.append(detection.anchor_uv)
 	var is_pointing := not pointing_fingers.is_empty()
 
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
 		particles_layer.UpdatePointingState(is_pointing, pointing_fingers)
+
+	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateGunState"):
+		particles_layer.UpdateGunState(gun_detections)
 
 	_update_draw_instruction(is_pointing)
 
@@ -202,6 +223,11 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 			gesture_status_label.text = "  |  ".join(messages)
 	else:
 		gesture_status_label.visible = false
+
+
+func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:
+	if is_instance_valid(audio_manager) and audio_manager.has_method("play_gun_shot"):
+		audio_manager.play_gun_shot()
 
 
 func _update_draw_instruction(is_pointing: bool) -> void:

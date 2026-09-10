@@ -41,6 +41,10 @@ var _crossfading: bool = false
 var _last_pointing_time_ms: int = 0
 var _stop_drawing_time_ms: int = 0
 
+var _shot_players: Array[AudioStreamPlayer] = []
+var _shot_stream: AudioStreamWAV = null
+var _shot_player_index: int = 0
+
 
 func _ready() -> void:
 	_setup_audio_players()
@@ -65,6 +69,48 @@ func _setup_audio_players() -> void:
 	_glitter_player.volume_db = -80.0
 	add_child(_glitter_player)
 
+	_shot_stream = _create_shot_stream()
+	for i in range(4):
+		var sp := AudioStreamPlayer.new()
+		sp.name = "ShotPlayer%d" % i
+		sp.bus = "Master"
+		sp.volume_db = -2.0
+		sp.stream = _shot_stream
+		add_child(sp)
+		_shot_players.append(sp)
+
+
+func _create_shot_stream() -> AudioStreamWAV:
+	var sample_rate := 22050
+	var duration := 0.22
+	var total_samples := int(sample_rate * duration)
+	var data := PackedByteArray()
+	data.resize(total_samples)
+	var phase := 0.0
+	for i in range(total_samples):
+		var t := float(i) / float(total_samples)
+		var freq := lerpf(1250.0, 160.0, t * t)
+		phase += freq / float(sample_rate) * TAU
+		var env := exp(-8.5 * t)
+		var sample := (sin(phase) + 0.35 * sin(phase * 2.0)) * env
+		var byte_val := clampi(int((sample * 0.85 + 1.0) * 127.5), 0, 255)
+		data[i] = byte_val
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_8_BITS
+	wav.mix_rate = sample_rate
+	wav.stereo = false
+	wav.data = data
+	return wav
+
+
+func play_gun_shot() -> void:
+	if not is_inside_tree() or _shot_players.is_empty() or _shot_stream == null:
+		return
+	var player := _shot_players[_shot_player_index]
+	_shot_player_index = (_shot_player_index + 1) % _shot_players.size()
+	player.pitch_scale = randf_range(0.92, 1.10)
+	player.play(0.0)
+
 
 func _load_stream(path: String, loop: bool) -> AudioStream:
 	var stream: AudioStream = null
@@ -85,6 +131,8 @@ func _load_stream(path: String, loop: bool) -> AudioStream:
 			push_error("AudioManager: Impossible d'ouvrir le fichier audio : %s" % path)
 	elif stream is AudioStreamMP3:
 		stream.loop = loop
+	elif stream is AudioStreamWAV:
+		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
 
 	return stream
 
