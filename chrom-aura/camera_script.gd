@@ -27,12 +27,14 @@ var depth_max_for_color := 1.0
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
+@onready var heart_particle_manager: Control = get_node_or_null("HeartParticleManager")
 
 var _hand_landmarker: MediaPipeHandLandmarker
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
+var _last_heart_audio_time_ms := 0
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -41,6 +43,13 @@ func _ready() -> void:
 			audio_manager = audio_mgr_script.new()
 			audio_manager.name = "AudioManager"
 			add_child(audio_manager)
+
+	if heart_particle_manager == null:
+		var heart_mgr_script: Script = load("res://scripts/heart_particle_manager.gd")
+		if heart_mgr_script != null:
+			heart_particle_manager = heart_mgr_script.new()
+			heart_particle_manager.name = "HeartParticleManager"
+			add_child(heart_particle_manager)
 
 	depth_camera.rgb_frame_ready.connect(_on_rgb_frame)
 	depth_camera.depth_frame_ready.connect(_on_depth_frame)
@@ -179,6 +188,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	var detections := gesture_engine.get_active_detections(timestamp_ms)
 	var pointing_fingers: Array[Vector2] = []
 	var gun_detections: Array[Dictionary] = []
+	var heart_detections: Array[Dictionary] = []
 	for detection in detections:
 		if detection.gesture == HandGestureEngine.INDEX_POINTING:
 			pointing_fingers.append(detection.anchor_uv)
@@ -197,6 +207,18 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 				})
 			else:
 				pointing_fingers.append(detection.anchor_uv)
+		elif detection.gesture == HandGestureEngine.FINGER_HEART:
+			heart_detections.append({
+				"anchor": detection.anchor_uv,
+				"gesture": detection.gesture,
+				"scale_hint": 0.8,
+			})
+		elif detection.gesture == HandGestureEngine.TWO_HAND_HEART:
+			heart_detections.append({
+				"anchor": detection.anchor_uv,
+				"gesture": detection.gesture,
+				"scale_hint": 1.35,
+			})
 	var is_pointing := not pointing_fingers.is_empty()
 
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdatePointingState"):
@@ -204,6 +226,16 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 	if is_instance_valid(particles_layer) and particles_layer.has_method("UpdateGunState"):
 		particles_layer.UpdateGunState(gun_detections)
+
+	if is_instance_valid(heart_particle_manager) and heart_particle_manager.has_method("update_heart_state"):
+		heart_particle_manager.update_heart_state(heart_detections)
+
+	if not heart_detections.is_empty():
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _last_heart_audio_time_ms >= 420:
+			_last_heart_audio_time_ms = now_ms
+			if is_instance_valid(audio_manager) and audio_manager.has_method("play_heart_sound"):
+				audio_manager.play_heart_sound()
 
 	_update_draw_instruction(is_pointing)
 

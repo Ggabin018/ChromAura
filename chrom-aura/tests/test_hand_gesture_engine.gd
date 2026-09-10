@@ -14,6 +14,7 @@ func _run() -> void:
 	_test_temporal_events(engine)
 	_test_gun_temporal_events(engine)
 	_test_track_association(engine)
+	_test_heart_events(engine)
 	engine.free()
 
 	if _failures.is_empty():
@@ -165,6 +166,27 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		HandGestureEngine.FINGER_GUN,
 		engine.maintenance_threshold,
 		"thumb up as finger gun",
+	)
+
+	var finger_heart := _make_finger_heart_pose()
+	var finger_heart_scores := engine.classify_pose(finger_heart)
+	_expect_score(
+		finger_heart_scores,
+		HandGestureEngine.FINGER_HEART,
+		engine.activation_threshold,
+		"finger heart pose",
+	)
+	_expect_below(
+		finger_heart_scores,
+		HandGestureEngine.INDEX_POINTING,
+		engine.maintenance_threshold,
+		"finger heart rejected as index pointing",
+	)
+	_expect_below(
+		pointing_scores,
+		HandGestureEngine.FINGER_HEART,
+		engine.maintenance_threshold,
+		"pointing rejected as finger heart",
 	)
 
 
@@ -481,3 +503,110 @@ func _make_gun_pose(pointing_left: bool, two_fingers: bool = true, thumb_up: boo
 	pose.handedness_score = 0.99
 	pose.update_geometry()
 	return pose
+
+
+func _make_finger_heart_pose() -> HandPose:
+	var points := PackedVector3Array()
+	points.resize(HandPose.LANDMARK_COUNT)
+	points[0] = Vector3(0.0, -0.65, 0.0)
+	points[1] = Vector3(-0.35, -0.15, 0.0)
+	points[2] = Vector3(-0.45, 0.05, 0.0)
+	points[3] = Vector3(-0.38, 0.22, 0.0)
+	points[4] = Vector3(-0.28, 0.32, 0.0)
+
+	points[5] = Vector3(-0.38, 0.0, 0.0)
+	points[6] = Vector3(-0.38, 0.35, 0.0)
+	points[7] = Vector3(-0.32, 0.36, 0.02)
+	points[8] = Vector3(-0.27, 0.31, 0.02)
+
+	_set_finger(points, 9, false)
+	_set_finger(points, 13, false)
+	_set_finger(points, 17, false)
+
+	var pose := HandPose.new()
+	pose.landmarks_3d = points
+	pose.landmarks_2d = _world_to_uv(points)
+	pose.handedness = &"RIGHT"
+	pose.handedness_score = 0.99
+	pose.update_geometry()
+	return pose
+
+
+func _test_heart_events(engine: HandGestureEngine) -> void:
+	# Test 1: Single hand FINGER_HEART temporal events
+	engine.clear()
+	var started: Array[GestureDetection] = []
+	var updated: Array[GestureDetection] = []
+	var ended: Array[GestureDetection] = []
+	engine.gesture_started.connect(func(d: GestureDetection) -> void: started.append(d))
+	engine.gesture_updated.connect(func(d: GestureDetection) -> void: updated.append(d))
+	engine.gesture_ended.connect(func(d: GestureDetection) -> void: ended.append(d))
+
+	var heart_pose := _make_finger_heart_pose()
+	var heart_obs: Array[HandObservation] = [_observation_from_pose(heart_pose)]
+
+	engine.process_observations(heart_obs, 0)
+	_assert(started.is_empty(), "finger heart started before activation delay")
+
+	engine.process_observations(heart_obs, engine.activation_delay_ms + 10)
+	_assert(started.size() == 1, "finger heart started should be emitted once")
+	if not started.is_empty():
+		_assert(started[0].gesture == HandGestureEngine.FINGER_HEART, "wrong gesture_started for finger heart")
+
+	engine.process_observations(heart_obs, engine.activation_delay_ms + 50)
+	_assert(not updated.is_empty(), "finger heart updated should be emitted")
+
+	var no_obs: Array[HandObservation] = []
+	engine.process_observations(no_obs, 200)
+	_assert(ended.is_empty(), "finger heart ended before release delay")
+
+	engine.process_observations(no_obs, 390)
+	_assert(ended.size() == 1, "finger heart ended should be emitted after release delay")
+
+	# Test 2: TWO_HAND_HEART temporal events
+	engine.clear()
+	started.clear()
+	updated.clear()
+	ended.clear()
+
+	var left_pose := _make_pose(HandGestureEngine.INDEX_POINTING)
+	left_pose.handedness = &"LEFT"
+	left_pose.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.49, 0.45)
+	left_pose.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.49, 0.60)
+	left_pose.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.42, 0.50)
+	left_pose.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.35, 0.55)
+	left_pose.update_geometry()
+
+	var right_pose := _make_pose(HandGestureEngine.INDEX_POINTING)
+	right_pose.handedness = &"RIGHT"
+	right_pose.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.51, 0.45)
+	right_pose.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.51, 0.60)
+	right_pose.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.58, 0.50)
+	right_pose.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.65, 0.55)
+	right_pose.update_geometry()
+
+	var two_hand_obs: Array[HandObservation] = [
+		_observation_from_pose(left_pose),
+		_observation_from_pose(right_pose),
+	]
+
+	engine.process_observations(two_hand_obs, 0)
+	var two_starts := started.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(two_starts.is_empty(), "TWO_HAND_HEART started before activation delay")
+
+	engine.process_observations(two_hand_obs, engine.activation_delay_ms + 10)
+	two_starts = started.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(two_starts.size() == 1, "TWO_HAND_HEART started should be emitted once")
+
+	engine.process_observations(two_hand_obs, engine.activation_delay_ms + 50)
+	var two_updates := updated.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(not two_updates.is_empty(), "TWO_HAND_HEART updated should be emitted")
+
+	# Hands leave frame
+	engine.process_observations(no_obs, 200)
+	var two_ends := ended.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(two_ends.is_empty(), "TWO_HAND_HEART ended before release delay")
+
+	engine.process_observations(no_obs, 390)
+	two_ends = ended.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(two_ends.size() == 1, "TWO_HAND_HEART ended should be emitted after release delay")

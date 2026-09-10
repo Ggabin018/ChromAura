@@ -45,6 +45,10 @@ var _shot_players: Array[AudioStreamPlayer] = []
 var _shot_stream: AudioStreamWAV = null
 var _shot_player_index: int = 0
 
+var _heart_players: Array[AudioStreamPlayer] = []
+var _heart_stream: AudioStreamWAV = null
+var _heart_player_index: int = 0
+
 
 func _ready() -> void:
 	_setup_audio_players()
@@ -79,6 +83,16 @@ func _setup_audio_players() -> void:
 		add_child(sp)
 		_shot_players.append(sp)
 
+	_heart_stream = _create_heart_stream()
+	for i in range(4):
+		var hp := AudioStreamPlayer.new()
+		hp.name = "HeartPlayer%d" % i
+		hp.bus = "Master"
+		hp.volume_db = -3.0
+		hp.stream = _heart_stream
+		add_child(hp)
+		_heart_players.append(hp)
+
 
 func _create_shot_stream() -> AudioStreamWAV:
 	var sample_rate := 22050
@@ -103,12 +117,60 @@ func _create_shot_stream() -> AudioStreamWAV:
 	return wav
 
 
+func _create_heart_stream() -> AudioStreamWAV:
+	var sample_rate := 22050
+	var duration := 0.55
+	var total_samples := int(sample_rate * duration)
+	var data := PackedByteArray()
+	data.resize(total_samples)
+	var phase1 := 0.0
+	var phase2 := 0.0
+	var phase3 := 0.0
+	var phase4 := 0.0
+	var f1 := 523.25
+	var f2 := 659.25
+	var f3 := 783.99
+	var f4 := 1046.50
+	for i in range(total_samples):
+		var time_sec := float(i) / float(sample_rate)
+		var env1 := exp(-5.0 * time_sec)
+		var env2 := exp(-4.5 * maxf(time_sec - 0.04, 0.0)) if time_sec >= 0.04 else 0.0
+		var env3 := exp(-4.0 * maxf(time_sec - 0.08, 0.0)) if time_sec >= 0.08 else 0.0
+		var env4 := exp(-3.5 * maxf(time_sec - 0.12, 0.0)) if time_sec >= 0.12 else 0.0
+
+		phase1 += f1 / float(sample_rate) * TAU
+		phase2 += f2 / float(sample_rate) * TAU
+		phase3 += f3 / float(sample_rate) * TAU
+		phase4 += f4 / float(sample_rate) * TAU
+
+		var s := 0.28 * sin(phase1) * env1 + 0.28 * sin(phase2) * env2 + 0.26 * sin(phase3) * env3 + 0.22 * sin(phase4) * env4
+		var shimmer := 0.06 * sin(phase4 * 2.0) * env4
+		var sample := (s + shimmer) * 0.90
+		var byte_val := clampi(int((sample + 1.0) * 127.5), 0, 255)
+		data[i] = byte_val
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_8_BITS
+	wav.mix_rate = sample_rate
+	wav.stereo = false
+	wav.data = data
+	return wav
+
+
 func play_gun_shot() -> void:
 	if not is_inside_tree() or _shot_players.is_empty() or _shot_stream == null:
 		return
 	var player := _shot_players[_shot_player_index]
 	_shot_player_index = (_shot_player_index + 1) % _shot_players.size()
 	player.pitch_scale = randf_range(0.92, 1.10)
+	player.play(0.0)
+
+
+func play_heart_sound() -> void:
+	if not is_inside_tree() or _heart_players.is_empty() or _heart_stream == null:
+		return
+	var player := _heart_players[_heart_player_index]
+	_heart_player_index = (_heart_player_index + 1) % _heart_players.size()
+	player.pitch_scale = randf_range(0.96, 1.06)
 	player.play(0.0)
 
 

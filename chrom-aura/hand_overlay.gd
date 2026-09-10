@@ -117,6 +117,12 @@ func _draw_pose_diagnostics(pose: HandPose, target: Rect2) -> void:
 			anchor = index_tip
 			direction = index_direction
 		_draw_anchor(anchor, direction, target)
+	elif pose.gesture == HandGestureEngine.FINGER_HEART:
+		var heart_anchor := (
+			pose.landmarks_2d[HandGestureEngine.THUMB_TIP]
+			+ pose.landmarks_2d[HandGestureEngine.INDEX_TIP]
+		) * 0.5
+		_draw_anchor(heart_anchor, Vector2.UP, target)
 
 
 func _draw_anchor(anchor_uv: Vector2, direction_uv: Vector2, target: Rect2) -> void:
