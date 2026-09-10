@@ -16,6 +16,7 @@ signal hand_lost(track_id: int)
 const INDEX_POINTING: StringName = &"INDEX_POINTING"
 const INDEX_MIDDLE_POINTING: StringName = &"INDEX_MIDDLE_POINTING"
 const THUMB_UP: StringName = &"THUMB_UP"
+const FINGER_GUN: StringName = &"FINGER_GUN"
 
 const WRIST := 0
 const THUMB_CMC := 1
@@ -203,10 +204,48 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	var thumb_shape_score := 0.50 * thumb_extended + 0.50 * all_fingers_folded
 	var thumb_up_score := thumb_shape_score * (0.45 + 0.55 * upward_score)
 
+	# Finger Gun requires INDEX and MIDDLE fingers extended (Index Middle Pointing gun)
+	var two_finger_gun_extension := minf(index_extended, middle_extended)
+	var ring_pinky_folded := 0.50 * ring_folded + 0.50 * pinky_folded
+	var gun_shape := (
+		0.60 * two_finger_gun_extension
+		+ 0.40 * ring_pinky_folded
+	)
+	if two_finger_gun_extension < 0.45 or ring_pinky_folded < 0.35:
+		gun_shape *= 0.10
+
+	var index_delta: Vector2 = pose.landmarks_2d[INDEX_TIP] - pose.landmarks_2d[INDEX_MCP]
+	var index_dir_2d: Vector2 = index_delta.normalized() if not index_delta.is_zero_approx() else Vector2.RIGHT
+	var middle_delta: Vector2 = pose.landmarks_2d[MIDDLE_TIP] - pose.landmarks_2d[MIDDLE_MCP]
+	var middle_dir_2d: Vector2 = middle_delta.normalized() if not middle_delta.is_zero_approx() else index_dir_2d
+	var barrel_combined: Vector2 = index_dir_2d + middle_dir_2d
+	var barrel_dir_2d: Vector2 = (
+		barrel_combined.normalized() if not barrel_combined.is_zero_approx() else index_dir_2d
+	)
+
+	var horizontal_alignment := _smoothstep(0.15, 0.40, absf(barrel_dir_2d.x))
+
+	# Thumb bonus: if thumb is cocked upward, it boosts score, but gun does NOT require it
+	var thumb_delta: Vector2 = pose.landmarks_2d[THUMB_TIP] - pose.landmarks_2d[THUMB_MCP]
+	var thumb_dir_2d: Vector2 = thumb_delta.normalized() if not thumb_delta.is_zero_approx() else Vector2.UP
+	var thumb_upward := thumb_dir_2d.dot(Vector2.UP)
+	var thumb_cocked := thumb_extended * _smoothstep(-0.25, 0.25, thumb_upward)
+	var thumb_bonus := 0.05 * clampf(thumb_cocked, 0.0, 1.0)
+
+	var finger_gun_score := (
+		gun_shape * horizontal_alignment * 0.94
+		+ thumb_bonus
+	)
+	finger_gun_score = clampf(finger_gun_score, 0.0, 1.0)
+
+	if finger_gun_score >= 0.70:
+		two_finger_pointing_score = minf(two_finger_pointing_score, finger_gun_score - 0.10)
+
 	return {
 		INDEX_POINTING: clampf(pointing_score, 0.0, 1.0),
 		INDEX_MIDDLE_POINTING: clampf(two_finger_pointing_score, 0.0, 1.0),
 		THUMB_UP: clampf(thumb_up_score, 0.0, 1.0),
+		FINGER_GUN: clampf(finger_gun_score, 0.0, 1.0),
 	}
 
 
@@ -459,6 +498,20 @@ func _make_detection(
 	elif gesture == THUMB_UP:
 		anchor = track.pose.landmarks_2d[THUMB_TIP]
 		direction = (anchor - track.pose.landmarks_2d[THUMB_IP]).normalized()
+	elif gesture == FINGER_GUN:
+		var index_tip: Vector2 = track.pose.landmarks_2d[INDEX_TIP]
+		var middle_tip: Vector2 = track.pose.landmarks_2d[MIDDLE_TIP]
+		var index_dir := (index_tip - track.pose.landmarks_2d[INDEX_DIP]).normalized()
+		var middle_dir := (middle_tip - track.pose.landmarks_2d[MIDDLE_DIP]).normalized()
+		if index_dir.dot(middle_dir) > 0.5:
+			anchor = (index_tip + middle_tip) * 0.5
+			direction = (index_dir + middle_dir).normalized()
+		else:
+			anchor = index_tip
+			direction = index_dir
+		if direction.is_zero_approx():
+			var fallback_dir: Vector2 = index_tip - track.pose.landmarks_2d[INDEX_MCP]
+			direction = fallback_dir.normalized() if not fallback_dir.is_zero_approx() else Vector2.RIGHT
 	return GestureDetection.new(
 		track.pose.track_id,
 		gesture,

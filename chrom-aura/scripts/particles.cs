@@ -13,9 +13,34 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsque le nombre de corps détectés change.</summary>
 	[Signal] public delegate void BodyCountChangedEventHandler(int count);
 
+	/// <summary>Émis lorsqu'un tir de pistolet est effectué.</summary>
+	[Signal] public delegate void GunShotFiredEventHandler(int trackId, Vector2 screenPos, Vector2 direction);
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
+
+	[ExportGroup("Pistolet Particules")]
+	/// <summary>Intervalle entre chaque coup en tir automatique continu (secondes).</summary>
+	[Export] public float GunFireInterval
+	{
+		get => _gunParticleManager.FireInterval;
+		set => _gunParticleManager.FireInterval = value;
+	}
+
+	/// <summary>Vélocité minimale des projectiles de tir.</summary>
+	[Export] public float GunProjectileSpeedMin
+	{
+		get => _gunParticleManager.ProjectileSpeedMin;
+		set => _gunParticleManager.ProjectileSpeedMin = value;
+	}
+
+	/// <summary>Vélocité maximale des projectiles de tir.</summary>
+	[Export] public float GunProjectileSpeedMax
+	{
+		get => _gunParticleManager.ProjectileSpeedMax;
+		set => _gunParticleManager.ProjectileSpeedMax = value;
+	}
 
 	[ExportGroup("Durées de vie")]
 	/// <summary>Durée de vie (secondes) des particules de tracé de dessin persistant.</summary>
@@ -99,13 +124,15 @@ public partial class particles : CanvasLayer
 	private readonly List<Vector2> _prevFingerScreenPos = new();
 	private readonly RandomNumberGenerator _random = new();
 
-	// Un seul pipeline visuel brume/scintillement pour le corps,
-	// et un double pipeline (cœur fluide lumineux + poussière d'étoiles) pour le tracé de dessin.
+	// Pipeline visuel brume/scintillement pour le corps,
+	// pipeline double pour le tracé de dessin persistant,
+	// et délégation complète du geste pistolet à GunParticleManager.
 	private readonly GpuParticles2D[] _mistParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _sparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _trailCoreParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 	private readonly GpuParticles2D[] _trailSparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
+	private readonly GunParticleManager _gunParticleManager = new();
 	private readonly List<Vector2> _smoothedFingerPos = new();
 
 	private BodyDebugOverlay _debugOverlay = null!;
@@ -140,6 +167,16 @@ public partial class particles : CanvasLayer
 			AddChild(_trailSparkleParticleSystems[i]);
 		}
 
+		// Initialisation du gestionnaire de particules pistolet
+		_gunParticleManager.Initialize(
+			this,
+			palettes,
+			CreateCanvasMaterial(),
+			CreateTrailGlowTexture(24),
+			CreateSparkleTexture(16),
+			EtherealGlowIntensity
+		);
+
 		// Initialisation de l'overlay de débug séparé
 		_debugOverlay = new BodyDebugOverlay();
 		_debugOverlay.Initialize(this);
@@ -163,6 +200,14 @@ public partial class particles : CanvasLayer
 			_prevFingerScreenPos.Clear();
 			_smoothedFingerPos.Clear();
 		}
+
+		// 1.5. Émission des tirs de particules pour le geste pistolet (Finger Gun)
+		_gunParticleManager.ProcessGunFirings(
+			_elapsedTime,
+			NormalizedToScreen,
+			GetPaletteIndexForTrack,
+			(trackId, pos, dir) => EmitSignal(SignalName.GunShotFired, trackId, pos, dir)
+		);
 
 		// 2. Émission des particules de silhouette corporelle
 		if (_maskPoints.Count == 0)
@@ -240,6 +285,41 @@ public partial class particles : CanvasLayer
 		);
 
 		_lastFingerUpdateTime = 0.0;
+	}
+
+	/// <summary>
+	/// Met à jour l'état des mains en posture de pistolet (FINGER_GUN) avec coordonnées et vecteur de visée.
+	/// </summary>
+	public void UpdateGunState(Godot.Collections.Array<Godot.Collections.Dictionary> gunDetections)
+	{
+		_gunParticleManager.UpdateGunState(gunDetections);
+	}
+
+	/// <summary>
+	/// Émet une salve de tir de particules depuis le bout des doigts dans la direction visée (gauche ou droite).
+	/// </summary>
+	public void EmitGunShot(Vector2 normalizedAnchor, Vector2 normalizedDirection, int trackId)
+	{
+		_gunParticleManager.EmitGunShot(
+			normalizedAnchor,
+			normalizedDirection,
+			trackId,
+			NormalizedToScreen,
+			GetPaletteIndexForTrack,
+			(tid, screenPos, dir) => EmitSignal(SignalName.GunShotFired, tid, screenPos, dir)
+		);
+	}
+
+	private int GetPaletteIndexForTrack(int trackId)
+	{
+		for (var b = 0; b < _bodyDetector.TrackedBodies.Count; b++)
+		{
+			if (_bodyDetector.TrackedBodies[b].Id == trackId)
+			{
+				return _bodyDetector.TrackedBodies[b].PaletteIndex;
+			}
+		}
+		return PaletteOffset;
 	}
 
 	/// <summary>

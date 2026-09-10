@@ -99,6 +99,24 @@ func _draw_pose_diagnostics(pose: HandPose, target: Rect2) -> void:
 			- pose.landmarks_2d[HandGestureEngine.THUMB_IP],
 			target,
 		)
+	elif pose.gesture == HandGestureEngine.FINGER_GUN:
+		var index_tip: Vector2 = pose.landmarks_2d[HandGestureEngine.INDEX_TIP]
+		var middle_tip: Vector2 = pose.landmarks_2d[HandGestureEngine.MIDDLE_TIP]
+		var index_direction := (
+			index_tip - pose.landmarks_2d[HandGestureEngine.INDEX_DIP]
+		).normalized()
+		var middle_direction := (
+			middle_tip - pose.landmarks_2d[HandGestureEngine.MIDDLE_DIP]
+		).normalized()
+		var anchor: Vector2
+		var direction: Vector2
+		if index_direction.dot(middle_direction) > 0.5:
+			anchor = (index_tip + middle_tip) * 0.5
+			direction = index_direction + middle_direction
+		else:
+			anchor = index_tip
+			direction = index_direction
+		_draw_anchor(anchor, direction, target)
 
 
 func _draw_anchor(anchor_uv: Vector2, direction_uv: Vector2, target: Rect2) -> void:
