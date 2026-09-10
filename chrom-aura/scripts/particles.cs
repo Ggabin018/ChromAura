@@ -320,7 +320,10 @@ public partial class particles : CanvasLayer
 		var intensityDepth = _releasedTrailSamples.Count > 0 ? _meanReleasedDepth
 			: (_demoBodyEnabled ? _demoBodyDepth : _meanBodyDepth);
 		var closeness = GetCloseness(intensityDepth);
-		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * Mathf.Lerp(0.4f, 1.0f, closeness);
+		// Keep the distant look unchanged, but compress the near-depth response so a
+		// close body cannot turn the overlapping coloured smoke into a white hotspot.
+		var depthIntensityScale = Mathf.Lerp(0.4f, 0.55f, Mathf.SmoothStep(0.0f, 1.0f, closeness));
+		var outwardIntensity = Mathf.Max(0.0f, OutwardIntensity) * depthIntensityScale;
 		// Native alpha blending: intensity controls opacity only, not RGB brightness.
 		_outwardParticleSystem.SelfModulate = new Color(1.0f, 1.0f, 1.0f,
 			1.0f - Mathf.Exp(-outwardIntensity));
