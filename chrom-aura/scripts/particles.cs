@@ -16,6 +16,9 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsqu'un tir de pistolet est effectué.</summary>
 	[Signal] public delegate void GunShotFiredEventHandler(int trackId, Vector2 screenPos, Vector2 direction);
 
+	/// <summary>Émis lorsqu'une impulsion d'énergie Six-Seven est déclenchée.</summary>
+	[Signal] public delegate void SixSevenPulseTriggeredEventHandler(int trackId, Vector2 screenPos);
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
@@ -176,6 +179,7 @@ public partial class particles : CanvasLayer
 	private readonly GpuParticles2D[] _trailSparkleParticleSystems = new GpuParticles2D[BodyPalette.DefaultPalettes.Length];
 
 	private readonly GunParticleManager _gunParticleManager = new();
+	private readonly SixSevenParticleManager _sixSevenParticleManager = new();
 	private readonly List<Vector2> _smoothedFingerPos = new();
 
 	private AmbientFireflies _ambientFireflies = null!;
@@ -241,6 +245,16 @@ public partial class particles : CanvasLayer
 
 		// Initialisation du gestionnaire de particules pistolet
 		_gunParticleManager.Initialize(
+			this,
+			palettes,
+			CreateCanvasMaterial(),
+			CreateTrailGlowTexture(24),
+			CreateSparkleTexture(16),
+			EtherealGlowIntensity
+		);
+
+		// Initialisation du gestionnaire de particules Six-Seven (6-7)
+		_sixSevenParticleManager.Initialize(
 			this,
 			palettes,
 			CreateCanvasMaterial(),
@@ -380,6 +394,21 @@ public partial class particles : CanvasLayer
 			GetPaletteIndexForTrack,
 			(tid, screenPos, dir) => EmitSignal(SignalName.GunShotFired, tid, screenPos, dir)
 		);
+	}
+
+	/// <summary>
+	/// Déclenche une impulsion de geyser d'énergie vertical Six-Seven (6-7) au niveau de la paume.
+	/// </summary>
+	public void TriggerSixSevenPulse(Vector2 normalizedAnchor, int trackId, float strength = 1.0f)
+	{
+		var screenAnchor = NormalizedToScreen(normalizedAnchor);
+		_sixSevenParticleManager.EmitSixSevenPulse(
+			screenAnchor,
+			trackId,
+			strength,
+			GetPaletteIndexForTrack
+		);
+		EmitSignal(SignalName.SixSevenPulseTriggered, trackId, screenAnchor);
 	}
 
 	private int GetPaletteIndexForTrack(int trackId)

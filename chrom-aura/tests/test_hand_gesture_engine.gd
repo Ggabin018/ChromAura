@@ -106,6 +106,12 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		engine.maintenance_threshold,
 		"open palm as finger gun",
 	)
+	_expect_score(
+		open_scores,
+		HandGestureEngine.PALM_UP,
+		engine.activation_threshold,
+		"open palm as palm up",
+	)
 
 	var gun_left := _make_gun_pose(true)
 	var gun_left_scores := engine.classify_pose(gun_left)
@@ -165,6 +171,24 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		HandGestureEngine.FINGER_GUN,
 		engine.maintenance_threshold,
 		"thumb up as finger gun",
+	)
+	_expect_below(
+		pointing_scores,
+		HandGestureEngine.PALM_UP,
+		engine.maintenance_threshold,
+		"vertical pointing as palm up",
+	)
+	_expect_below(
+		thumb_scores,
+		HandGestureEngine.PALM_UP,
+		engine.maintenance_threshold,
+		"thumb up as palm up",
+	)
+	_expect_below(
+		gun_left_scores,
+		HandGestureEngine.PALM_UP,
+		engine.maintenance_threshold,
+		"finger gun as palm up",
 	)
 
 

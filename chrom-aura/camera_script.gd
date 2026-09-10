@@ -34,6 +34,11 @@ var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
 
+var _six_seven_last_pulse_ms: Dictionary = {}
+var _six_seven_was_moving_up: Dictionary = {}
+const SIX_SEVEN_PULSE_COOLDOWN_MS := 220
+const SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD := -0.18
+
 func _ready() -> void:
 	if audio_manager == null:
 		var audio_mgr_script: Script = load("res://audio_manager.gd")
@@ -60,6 +65,7 @@ func _ready() -> void:
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("GunShotFired"):
 		particles_layer.connect("GunShotFired", _on_gun_shot_fired)
+	gesture_engine.hand_lost.connect(_on_hand_lost)
 	_update_body_debug_ui()
 
 	if _initialize_hand_landmarker():
@@ -210,6 +216,30 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	if is_instance_valid(audio_manager) and audio_manager.has_method("set_drawing"):
 		audio_manager.set_drawing(is_pointing)
 
+	# Geste Six-Seven (6-7) : Deux mains paumes vers le haut (PALM_UP) + impulsion verticale à chaque levée
+	var palm_up_poses: Array[HandPose] = []
+	for pose in gesture_engine.get_hand_poses():
+		if pose.gesture == HandGestureEngine.PALM_UP:
+			palm_up_poses.append(pose)
+
+	if palm_up_poses.size() >= 2:
+		for pose in palm_up_poses:
+			var vy: float = pose.velocity_uv.y
+			var last_pulse: int = _six_seven_last_pulse_ms.get(pose.track_id, -1)
+			var was_moving_up: bool = _six_seven_was_moving_up.get(pose.track_id, false)
+			if vy < SIX_SEVEN_UPWARD_VELOCITY_THRESHOLD:
+				if (not was_moving_up) or (timestamp_ms - last_pulse >= SIX_SEVEN_PULSE_COOLDOWN_MS):
+					_six_seven_last_pulse_ms[pose.track_id] = timestamp_ms
+					_six_seven_was_moving_up[pose.track_id] = true
+					var strength := clampf(absf(vy) / 0.42, 0.7, 1.8)
+					if is_instance_valid(particles_layer) and particles_layer.has_method("TriggerSixSevenPulse"):
+						particles_layer.TriggerSixSevenPulse(pose.palm_center_uv, pose.track_id, strength)
+					if is_instance_valid(audio_manager) and audio_manager.has_method("play_six_seven_pulse"):
+						var pitch := lerpf(0.92, 1.22, (strength - 0.7) / 1.1)
+						audio_manager.play_six_seven_pulse(pitch)
+			elif vy >= -0.06:
+				_six_seven_was_moving_up[pose.track_id] = false
+
 	if dev_mode_toggled:
 		hand_overlay.show_hand_poses(gesture_engine.get_hand_poses(), _rgb_frame_size)
 		gesture_status_label.visible = not detections.is_empty()
@@ -220,9 +250,16 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 					"#%d %s (%.0f%%)"
 					% [detection.track_id, detection.gesture, detection.score * 100.0]
 				)
+			if palm_up_poses.size() >= 2:
+				messages.append("✨ [SIX-SEVEN] ✨")
 			gesture_status_label.text = "  |  ".join(messages)
 	else:
 		gesture_status_label.visible = false
+
+
+func _on_hand_lost(track_id: int) -> void:
+	_six_seven_last_pulse_ms.erase(track_id)
+	_six_seven_was_moving_up.erase(track_id)
 
 
 func _on_gun_shot_fired(_track_id: int, _screen_pos: Vector2, _direction: Vector2) -> void:

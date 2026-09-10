@@ -45,6 +45,10 @@ var _shot_players: Array[AudioStreamPlayer] = []
 var _shot_stream: AudioStreamWAV = null
 var _shot_player_index: int = 0
 
+var _six_seven_players: Array[AudioStreamPlayer] = []
+var _six_seven_stream: AudioStreamWAV = null
+var _six_seven_player_index: int = 0
+
 
 func _ready() -> void:
 	_setup_audio_players()
@@ -79,6 +83,16 @@ func _setup_audio_players() -> void:
 		add_child(sp)
 		_shot_players.append(sp)
 
+	_six_seven_stream = _create_six_seven_stream()
+	for i in range(4):
+		var ssp := AudioStreamPlayer.new()
+		ssp.name = "SixSevenPlayer%d" % i
+		ssp.bus = "Master"
+		ssp.volume_db = -3.0
+		ssp.stream = _six_seven_stream
+		add_child(ssp)
+		_six_seven_players.append(ssp)
+
 
 func _create_shot_stream() -> AudioStreamWAV:
 	var sample_rate := 22050
@@ -109,6 +123,39 @@ func play_gun_shot() -> void:
 	var player := _shot_players[_shot_player_index]
 	_shot_player_index = (_shot_player_index + 1) % _shot_players.size()
 	player.pitch_scale = randf_range(0.92, 1.10)
+	player.play(0.0)
+
+
+func _create_six_seven_stream() -> AudioStreamWAV:
+	var sample_rate := 22050
+	var duration := 0.28
+	var total_samples := int(sample_rate * duration)
+	var data := PackedByteArray()
+	data.resize(total_samples)
+	var phase := 0.0
+	for i in range(total_samples):
+		var t := float(i) / float(total_samples)
+		var freq := lerpf(320.0, 1150.0, sqrt(t))
+		phase += freq / float(sample_rate) * TAU
+		var shimmer := sin(phase * 2.01) * 0.30 + sin(phase * 3.02) * 0.15
+		var env := (1.0 - exp(-30.0 * t)) * exp(-5.5 * t)
+		var sample := (sin(phase) + shimmer) * env
+		var byte_val := clampi(int((sample * 0.75 + 1.0) * 127.5), 0, 255)
+		data[i] = byte_val
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_8_BITS
+	wav.mix_rate = sample_rate
+	wav.stereo = false
+	wav.data = data
+	return wav
+
+
+func play_six_seven_pulse(pitch_scale: float = 1.0) -> void:
+	if not is_inside_tree() or _six_seven_players.is_empty() or _six_seven_stream == null:
+		return
+	var player := _six_seven_players[_six_seven_player_index]
+	_six_seven_player_index = (_six_seven_player_index + 1) % _six_seven_players.size()
+	player.pitch_scale = clampf(pitch_scale * randf_range(0.96, 1.08), 0.7, 1.6)
 	player.play(0.0)
 
 

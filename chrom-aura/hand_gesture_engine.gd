@@ -17,6 +17,7 @@ const INDEX_POINTING: StringName = &"INDEX_POINTING"
 const INDEX_MIDDLE_POINTING: StringName = &"INDEX_MIDDLE_POINTING"
 const THUMB_UP: StringName = &"THUMB_UP"
 const FINGER_GUN: StringName = &"FINGER_GUN"
+const PALM_UP: StringName = &"PALM_UP"
 
 const WRIST := 0
 const THUMB_CMC := 1
@@ -238,6 +239,33 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	)
 	finger_gun_score = clampf(finger_gun_score, 0.0, 1.0)
 
+	var ring_extended := _finger_extended_score(
+		landmarks, RING_MCP, RING_PIP, RING_DIP, RING_TIP
+	)
+	var pinky_extended := _finger_extended_score(
+		landmarks, PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP
+	)
+
+	# Palm Up (6-7): All 4 fingers extended and wrist lower than palm
+	var four_fingers_ext := (index_extended + middle_extended + ring_extended + pinky_extended) * 0.25
+	var min_finger_ext := minf(minf(index_extended, middle_extended), minf(ring_extended, pinky_extended))
+	var hand_open_shape := 0.60 * four_fingers_ext + 0.40 * min_finger_ext
+
+	var wrist_uv: Vector2 = pose.landmarks_2d[WRIST]
+	var palm_uv: Vector2 = pose.palm_center_uv
+	var up_vec_2d := (palm_uv - wrist_uv)
+	var upward_orientation := 0.0
+	if not up_vec_2d.is_zero_approx():
+		var dot_up := (-up_vec_2d.normalized()).dot(Vector2.UP)
+		upward_orientation = _smoothstep(-0.25, 0.40, dot_up)
+	else:
+		upward_orientation = 0.50
+
+	var palm_up_score := hand_open_shape * (0.35 + 0.65 * upward_orientation)
+	if hand_open_shape < 0.35:
+		palm_up_score *= 0.10
+	palm_up_score = clampf(palm_up_score, 0.0, 1.0)
+
 	if finger_gun_score >= 0.70:
 		two_finger_pointing_score = minf(two_finger_pointing_score, finger_gun_score - 0.10)
 
@@ -246,6 +274,7 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 		INDEX_MIDDLE_POINTING: clampf(two_finger_pointing_score, 0.0, 1.0),
 		THUMB_UP: clampf(thumb_up_score, 0.0, 1.0),
 		FINGER_GUN: clampf(finger_gun_score, 0.0, 1.0),
+		PALM_UP: palm_up_score,
 	}
 
 
@@ -512,6 +541,9 @@ func _make_detection(
 		if direction.is_zero_approx():
 			var fallback_dir: Vector2 = index_tip - track.pose.landmarks_2d[INDEX_MCP]
 			direction = fallback_dir.normalized() if not fallback_dir.is_zero_approx() else Vector2.RIGHT
+	elif gesture == PALM_UP:
+		anchor = track.pose.palm_center_uv
+		direction = Vector2.UP
 	return GestureDetection.new(
 		track.pose.track_id,
 		gesture,
