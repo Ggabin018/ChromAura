@@ -274,23 +274,25 @@ public sealed class BodyDetector
 			}
 			else
 			{
-				// Nouveau corps arrivant dans le champ : attribution d'une palette libre
+				// Nouveau corps arrivant dans le champ : attribution aléatoire d'une palette libre
 				var usedPalettes = new HashSet<int>();
 				foreach (var b in _trackedBodies)
 				{
 					usedPalettes.Add(b.PaletteIndex);
 				}
 
-				var newPaletteIndex = 0;
+				var availablePalettes = new List<int>();
 				for (var p = 0; p < totalPalettes; p++)
 				{
-					var candidate = (p + paletteOffset) % totalPalettes;
-					if (!usedPalettes.Contains(candidate))
+					if (!usedPalettes.Contains(p))
 					{
-						newPaletteIndex = candidate;
-						break;
+						availablePalettes.Add(p);
 					}
 				}
+
+				var newPaletteIndex = availablePalettes.Count > 0
+					? availablePalettes[random.RandiRange(0, availablePalettes.Count - 1)]
+					: paletteOffset % totalPalettes;
 
 				var newBody = new TrackedBody
 				{

@@ -16,7 +16,6 @@ extends Control
 @onready var particles_layer: Node = $Particles
 @onready var draw_instruction: Control = $DrawInstructionLayer/DrawInstruction
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
-@onready var body_silhouette: TextureRect = $Particles/BodySilhouette
 
 var _hand_landmarker: MediaPipeHandLandmarker
 var _recognition_pending := false
@@ -50,9 +49,6 @@ func _ready() -> void:
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
 	_update_body_debug_ui()
-
-	if body_silhouette.material is ShaderMaterial:
-		body_silhouette.material.set_shader_parameter("threshold", depth_threshold)
 
 	if _initialize_hand_landmarker():
 		_set_status("Kinect & MediaPipe Initialized.")
@@ -210,8 +206,6 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 func _on_depth_frame(image_texture: ImageTexture) -> void:
 	if image_texture == null:
 		return
-
-	body_silhouette.texture = image_texture
 
 	var source := image_texture.get_image()
 	if source == null or source.is_empty():
