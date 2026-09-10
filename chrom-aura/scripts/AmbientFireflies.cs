@@ -61,6 +61,7 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	public float TwinkleSpeed { get; set; } = 1.0f;
 	public float AmbientOpacity { get; set; } = 0.34f;
 	public float ReturnStrength { get; set; } = 0.22f;
+	public float ReturnWhileBodies { get; set; } = 0.35f;
 	public float AnchorWanderRadius { get; set; } = 18.0f;
 	public float ReturnDelay { get; set; } = 0.4f;
 	public bool PreserveAspectRatio { get; set; } = true;
@@ -116,9 +117,9 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		_hasVisibleBodies = _bodyMotions.Count > 0;
 		if (_hasVisibleBodies)
 		{
-			// Une silhouette reprend toujours la priorité sur le rappel vers les ancres.
 			_secondsWithoutBodies = 0.0f;
-			_returnBlend = 0.0f;
+			// Le rappel reste actif loin du corps, sans conserver une force forte à son apparition.
+			_returnBlend = Mathf.Min(_returnBlend, Mathf.Clamp(ReturnWhileBodies, 0.0f, 1.0f));
 		}
 
 		BuildDensityField();
@@ -240,7 +241,11 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		if (_hasVisibleBodies)
 		{
 			_secondsWithoutBodies = 0.0f;
-			_returnBlend = 0.0f;
+			_returnBlend = Mathf.MoveToward(
+				_returnBlend,
+				Mathf.Clamp(ReturnWhileBodies, 0.0f, 1.0f),
+				delta * 2.0f
+			);
 			return;
 		}
 
@@ -267,7 +272,25 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		) * AnchorWanderRadius;
 		var anchorPosition = firefly.HomeUv * viewportSize + anchorOffset;
 		var displacement = ToroidalDelta(firefly.Position, anchorPosition, viewportSize);
-		acceleration += displacement * (ReturnStrength * _returnBlend);
+		var silhouetteDensity = GetSilhouetteDensity(firefly.Position, viewportSize);
+		// Le rappel s'efface rapidement dans le halo du masque pour ne jamais lutter
+		// visuellement contre la répulsion, même si l'ancre se trouve derrière le corps.
+		var localReturn = Mathf.Pow(1.0f - Mathf.Clamp(silhouetteDensity * 3.0f, 0.0f, 1.0f), 2.0f);
+		acceleration += displacement * (ReturnStrength * _returnBlend * localReturn);
+	}
+
+	private float GetSilhouetteDensity(Vector2 screenPosition, Vector2 viewportSize)
+	{
+		if (_density.Length == 0)
+			return 0.0f;
+
+		var maskPosition = ScreenToMask(screenPosition, viewportSize);
+		if (maskPosition.X < 0.0f || maskPosition.Y < 0.0f
+			|| maskPosition.X >= _maskSize.X || maskPosition.Y >= _maskSize.Y)
+			return 0.0f;
+
+		var gridPosition = maskPosition / FieldCellSize;
+		return Mathf.Clamp(SampleDensity(gridPosition.X, gridPosition.Y), 0.0f, 1.0f);
 	}
 
 	private void EnsureFieldStorage()

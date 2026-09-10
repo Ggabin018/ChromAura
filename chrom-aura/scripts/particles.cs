@@ -91,8 +91,12 @@ public partial class particles : CanvasLayer
 	/// <summary>Multiplicateur de vitesse du scintillement.</summary>
 	[Export] public float AmbientTwinkleSpeed { get; set; } = 1.0f;
 
-	/// <summary>Force de rappel vers la répartition uniforme quand aucune silhouette n'est visible.</summary>
+	/// <summary>Force maximale de rappel vers la répartition uniforme.</summary>
 	[Export] public float AmbientReturnStrength { get; set; } = 0.22f;
+
+	/// <summary>Part du rappel conservée lorsqu'au moins une silhouette est visible.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float AmbientReturnWhileBodies { get; set; } = 0.35f;
 
 	/// <summary>Amplitude du mouvement libre autour de l'ancre de chaque luciole, en pixels.</summary>
 	[Export] public float AmbientAnchorWanderRadius { get; set; } = 18.0f;
@@ -210,6 +214,7 @@ public partial class particles : CanvasLayer
 			ParticleSizeMax = AmbientParticleSizeMax,
 			TwinkleSpeed = AmbientTwinkleSpeed,
 			ReturnStrength = AmbientReturnStrength,
+			ReturnWhileBodies = AmbientReturnWhileBodies,
 			AnchorWanderRadius = AmbientAnchorWanderRadius,
 			ReturnDelay = AmbientReturnDelay,
 			AmbientOpacity = AmbientParticleOpacity,
