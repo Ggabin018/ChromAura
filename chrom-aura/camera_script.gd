@@ -34,7 +34,6 @@ var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
 var dev_mode_toggled := false
 
-
 func _ready() -> void:
 	if audio_manager == null:
 		var audio_mgr_script: Script = load("res://audio_manager.gd")
@@ -229,8 +228,7 @@ func _on_depth_frame(image_texture: ImageTexture) -> void:
 		for x in range(width):
 			var raw_depth := source.get_pixel(x, y).r
 			if raw_depth >= depth_threshold:
-				var normalized_depth = normalize_depth(raw_depth)
-				depth_mask.set_pixel(width - 1 - x, y, Color(normalized_depth, 0, 0, 1))
+				depth_mask.set_pixel(width - 1 - x, y, Color(raw_depth, 0, 0, 1))
 
 	particles_layer.SetDepthImageMask(depth_mask)
 	_update_body_debug_ui()

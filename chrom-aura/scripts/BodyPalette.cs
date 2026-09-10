@@ -20,7 +20,7 @@ public readonly record struct BodyPalette(
 	/// </summary>
 	public Color EvaluateBody(float t)
 	{
-		return ColorFar.Lerp(ColorNear, Mathf.Clamp(t, 0.0f, 1.0f));
+		return ColorFar.Lerp(ColorNear, t);
 	}
 
 	/// <summary>
@@ -28,7 +28,7 @@ public readonly record struct BodyPalette(
 	/// </summary>
 	public Color EvaluateTrail(float t)
 	{
-		return TrailStart.Lerp(TrailEnd, Mathf.Clamp(t, 0.0f, 1.0f));
+		return TrailStart.Lerp(TrailEnd, t);
 	}
 
 	/// <summary>
