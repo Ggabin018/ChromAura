@@ -1,10 +1,10 @@
 extends Control
 
 @export_file("*.task") var model_path := "res://assets/models/hand_landmarker.task"
-@export_range(1, 8, 1) var max_hands := 4
-@export_range(0.0, 1.0, 0.05) var hand_detection_confidence := 0.40
-@export_range(0.0, 1.0, 0.05) var hand_presence_confidence := 0.40
-@export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.40
+@export_range(1, 8, 1) var max_hands := 2
+@export_range(0.0, 1.0, 0.05) var hand_detection_confidence := 0.4
+@export_range(0.0, 1.0, 0.05) var hand_presence_confidence := 0.6
+@export_range(0.0, 1.0, 0.05) var hand_tracking_confidence := 0.6
 @export_range(0.0, 1.0, 0.05) var depth_threshold := 0.65
 
 @onready var depth_camera: DepthCameraNode = $DepthCameraNode
@@ -13,6 +13,8 @@ extends Control
 @onready var status_label: Label = $Status
 @onready var body_status_label: RichTextLabel = $BodyStatus
 @onready var gesture_status_label: Label = $GestureStatus
+@onready var rgb_debug_layer: CanvasLayer = $RgbDebugLayer
+@onready var rgb_debug_view: TextureRect = $RgbDebugLayer/CameraView
 
 @export_range(0.0, 1.0, 0.01)
 var depth_min_for_color := 0.65
@@ -29,14 +31,17 @@ var depth_max_for_color := 1.0
 @onready var audio_manager: Node = get_node_or_null("AudioManager")
 
 var _hand_landmarker: MediaPipeHandLandmarker
+var _hand_landmarker_delegate := ""
 var _recognition_pending := false
 var _last_timestamp_ms := 0
 var _rgb_frame_size := Vector2i(640, 480)
+var _rgb_debug_texture: ImageTexture
 var dev_mode_toggled := false
 var _track_thumb_up_times: Dictionary[int, int] = {}
 var _last_global_thumb_up_time_ms: int = -999999
 var _last_wilhelm_easter_egg_ms: int = -999999
 var _wilhelm_easter_egg_active_until_ms: int = -1
+var rgb_debug_toggled := false
 
 func _ready() -> void:
 	if audio_manager == null:
@@ -63,6 +68,8 @@ func _ready() -> void:
 		gesture_engine.maintenance_threshold = 0.45
 		gesture_engine.activation_delay_ms = 60
 		gesture_engine.release_delay_ms = 250
+	rgb_debug_layer.visible = false
+	set_process_input(true)
 
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("BodyCountChanged"):
 		particles_layer.connect("BodyCountChanged", _on_body_count_changed)
@@ -71,7 +78,7 @@ func _ready() -> void:
 	_update_body_debug_ui()
 
 	if _initialize_hand_landmarker():
-		_set_status("Kinect & MediaPipe Initialized.")
+		_set_status("Kinect & MediaPipe Initialized (%s)." % _hand_landmarker_delegate)
 	else:
 		_set_status("Kinect started (MediaPipe failed).")
 
@@ -79,6 +86,12 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("rgb-debug-toggle"):
+		rgb_debug_toggled = not rgb_debug_toggled
+		rgb_debug_layer.visible = rgb_debug_toggled
+		get_viewport().set_input_as_handled()
+		return
+
 	if event.is_action_pressed("dev-mode-toggle"):
 		dev_mode_toggled = not dev_mode_toggled
 		hand_overlay.visible = dev_mode_toggled
@@ -99,13 +112,29 @@ func _initialize_hand_landmarker() -> bool:
 	if model_file == null:
 		_show_error("MediaPipe model not found: %s" % model_path)
 		return false
+	var model_buffer := model_file.get_buffer(model_file.get_length())
 
+	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_GPU):
+		_hand_landmarker_delegate = "GPU"
+		return true
+
+	push_warning("MediaPipe GPU delegate unavailable; falling back to CPU.")
+	if _try_initialize_hand_landmarker(model_buffer, MediaPipeTaskBaseOptions.DELEGATE_CPU):
+		_hand_landmarker_delegate = "CPU fallback"
+		return true
+
+	_hand_landmarker = null
+	_show_error("Failed to initialize MediaPipe Hand Landmarker with GPU and CPU delegates.")
+	return false
+
+
+func _try_initialize_hand_landmarker(model_buffer: PackedByteArray, delegate: int) -> bool:
 	var base_options := MediaPipeTaskBaseOptions.new()
-	base_options.delegate = MediaPipeTaskBaseOptions.DELEGATE_CPU
-	base_options.model_asset_buffer = model_file.get_buffer(model_file.get_length())
+	base_options.delegate = delegate
+	base_options.model_asset_buffer = model_buffer
 
-	_hand_landmarker = MediaPipeHandLandmarker.new()
-	if not _hand_landmarker.initialize(
+	var candidate := MediaPipeHandLandmarker.new()
+	if not candidate.initialize(
 		base_options,
 		MediaPipeVisionTask.RUNNING_MODE_LIVE_STREAM,
 		max_hands,
@@ -113,10 +142,9 @@ func _initialize_hand_landmarker() -> bool:
 		hand_presence_confidence,
 		hand_tracking_confidence,
 	):
-		_hand_landmarker = null
-		_show_error("Failed to initialize MediaPipe Hand Landmarker.")
 		return false
 
+	_hand_landmarker = candidate
 	_hand_landmarker.result_callback.connect(_on_hand_result)
 	return true
 
@@ -132,6 +160,8 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 		image.convert(Image.FORMAT_RGB8)
 
 	image.flip_x()
+	if rgb_debug_toggled:
+		_update_rgb_debug_view(image)
 
 	_rgb_frame_size = Vector2i(image.get_width(), image.get_height())
 	_recognition_pending = true
@@ -140,6 +170,18 @@ func _on_rgb_frame(image_texture: ImageTexture) -> void:
 	var timestamp_ms := maxi(Time.get_ticks_msec(), _last_timestamp_ms + 1)
 	_last_timestamp_ms = timestamp_ms
 	_hand_landmarker.detect_async(media_pipe_image, timestamp_ms)
+
+
+func _update_rgb_debug_view(image: Image) -> void:
+	if (
+		_rgb_debug_texture == null
+		or _rgb_debug_texture.get_width() != image.get_width()
+		or _rgb_debug_texture.get_height() != image.get_height()
+	):
+		_rgb_debug_texture = ImageTexture.create_from_image(image)
+		rgb_debug_view.texture = _rgb_debug_texture
+	else:
+		_rgb_debug_texture.update(image)
 
 
 func _on_hand_result(
