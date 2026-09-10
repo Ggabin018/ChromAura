@@ -221,6 +221,55 @@ public sealed class GunParticleManager
 		onShotFired(trackId, screenAnchor, dir);
 	}
 
+	/// <summary>
+	/// Émet une explosion spectaculaire de particules d'easter egg (onde de choc radiale et pluie d'étincelles tombantes).
+	/// </summary>
+	public void EmitWilhelmBurst(Vector2 screenPos)
+	{
+		if (_gunSparkParticleSystems.Length == 0 || _gunProjectileParticleSystems.Length == 0)
+			return;
+
+		var systemIndex = _random.RandiRange(0, _gunSparkParticleSystems.Length - 1);
+		var sparkSystem = _gunSparkParticleSystems[systemIndex];
+		var projectileSystem = _gunProjectileParticleSystems[systemIndex];
+
+		// 1. Onde de choc circulaire d'éclats haute vélocité à 360 degrés
+		const int ringCount = 36;
+		for (var i = 0; i < ringCount; i++)
+		{
+			var angle = (i / (float)ringCount) * Mathf.Tau;
+			var dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+			var speed = _random.RandfRange(450.0f, 950.0f);
+			var vel = dir * speed;
+			var color = BoostColor(new Color(1.0f, 0.25f, 0.15f, 1.0f).Lerp(Colors.Gold, _random.RandfRange(0.0f, 0.75f)), 1.2f);
+			projectileSystem.EmitParticle(
+				new Transform2D(angle, screenPos + dir * 8.0f),
+				vel,
+				color,
+				Colors.White,
+				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+			);
+		}
+
+		// 2. Cascade d'étincelles dorées et pourpres tombant vers le bas (chute de Wilhelm)
+		const int fallCount = 64;
+		for (var i = 0; i < fallCount; i++)
+		{
+			var angle = Mathf.DegToRad(_random.RandfRange(45.0f, 135.0f));
+			var dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+			var speed = _random.RandfRange(350.0f, 1100.0f);
+			var vel = dir * speed + new Vector2(_random.RandfRange(-160.0f, 160.0f), 220.0f);
+			var color = BoostColor(new Color(1.0f, 0.45f, 0.1f, 1.0f).Lerp(Colors.White, _random.RandfRange(0.2f, 0.85f)), 1.1f);
+			sparkSystem.EmitParticle(
+				new Transform2D(_random.RandfRange(0.0f, Mathf.Tau), screenPos + RandomOffset(18.0f)),
+				vel,
+				color,
+				Colors.White,
+				(uint)(GpuParticles2D.EmitFlags.Position | GpuParticles2D.EmitFlags.Velocity | GpuParticles2D.EmitFlags.Color)
+			);
+		}
+	}
+
 	private Vector2 RandomOffset(float radius)
 	{
 		return new Vector2(

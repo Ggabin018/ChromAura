@@ -16,6 +16,9 @@ public partial class particles : CanvasLayer
 	/// <summary>Émis lorsqu'un tir de pistolet est effectué.</summary>
 	[Signal] public delegate void GunShotFiredEventHandler(int trackId, Vector2 screenPos, Vector2 direction);
 
+	/// <summary>Émis lorsque l'easter egg du cri de Wilhelm est déclenché.</summary>
+	[Signal] public delegate void WilhelmEasterEggTriggeredEventHandler(Vector2 screenPos);
+
 	// =========================================================================
 	// PARAMÈTRES EXPORTÉS (Inspecteur Godot)
 	// =========================================================================
@@ -380,6 +383,16 @@ public partial class particles : CanvasLayer
 			GetPaletteIndexForTrack,
 			(tid, screenPos, dir) => EmitSignal(SignalName.GunShotFired, tid, screenPos, dir)
 		);
+	}
+
+	/// <summary>
+	/// Émet une explosion de particules pour l'easter egg du Cri de Wilhelm.
+	/// </summary>
+	public void EmitWilhelmEasterEgg(Vector2 normalizedAnchor)
+	{
+		var screenPos = NormalizedToScreen(normalizedAnchor);
+		_gunParticleManager.EmitWilhelmBurst(screenPos);
+		EmitSignal(SignalName.WilhelmEasterEggTriggered, screenPos);
 	}
 
 	private int GetPaletteIndexForTrack(int trackId)

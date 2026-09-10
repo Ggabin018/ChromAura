@@ -92,7 +92,7 @@ func _draw_pose_diagnostics(pose: HandPose, target: Rect2) -> void:
 			index_direction + middle_direction,
 			target,
 		)
-	elif pose.gesture == HandGestureEngine.THUMB_UP:
+	elif pose.gesture == HandGestureEngine.THUMB_UP or pose.gesture == HandGestureEngine.THUMB_DOWN:
 		_draw_anchor(
 			pose.landmarks_2d[HandGestureEngine.THUMB_TIP],
 			pose.landmarks_2d[HandGestureEngine.THUMB_TIP]
