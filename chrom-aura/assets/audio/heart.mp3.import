@@ -12,7 +12,7 @@ dest_files=["res://.godot/imported/heart.mp3-77e77e5cb54bfbcc0fed2e541d714e7b.mp
 
 [params]
 
-loop=false
+loop=true
 loop_offset=0
 bpm=0
 beat_count=0

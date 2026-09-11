@@ -68,6 +68,10 @@ func is_heart_active() -> bool:
 	return not _active_anchors.is_empty()
 
 
+func has_hearts() -> bool:
+	return not _hearts.is_empty() or not _active_anchors.is_empty()
+
+
 func _init_heart_points() -> void:
 	_heart_points.clear()
 	_heart_point_colors.clear()
