@@ -150,6 +150,10 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if is_instance_valid(heart_particle_manager) and is_instance_valid(audio_manager):
+		var has_hearts: bool = heart_particle_manager.has_hearts() if heart_particle_manager.has_method("has_hearts") else false
+		audio_manager.set_heart_music(has_hearts)
+
 	if Input.is_action_just_pressed("debug_toggle_body"):
 		debug_body_enabled = not debug_body_enabled
 		if debug_body_enabled:
@@ -454,8 +458,7 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 	var is_heart := not heart_detections.is_empty()
 	if is_instance_valid(heart_particle_manager) and heart_particle_manager.has_method("update_heart_state"):
 		heart_particle_manager.update_heart_state(heart_detections)
-
-	if is_instance_valid(audio_manager) and audio_manager.has_method("set_heart_music"):
+	elif is_instance_valid(audio_manager) and audio_manager.has_method("set_heart_music"):
 		audio_manager.set_heart_music(is_heart)
 
 	_update_draw_instruction(is_pointing)

@@ -17,7 +17,7 @@ extends Node
 @export_group("Volumes (dB)")
 @export_range(-80.0, 6.0, 0.5) var ambient_volume_db: float = -8.0
 @export_range(-80.0, 6.0, 0.5) var glitter_volume_db: float = -2.0
-@export_range(-80.0, 6.0, 0.5) var heart_volume_db: float = 0.0
+@export_range(-80.0, 6.0, 0.5) var heart_volume_db: float = -6.0
 @export_range(-80.0, 6.0, 0.5) var wilhelm_volume_db: float = 0.0
 @export_range(-80.0, 6.0, 0.5) var shot_volume_db: float = -2.0
 
@@ -114,6 +114,10 @@ func _setup_audio_players() -> void:
 	_heart_music_player.bus = "Master"
 	_heart_music_player.volume_db = -80.0
 	add_child(_heart_music_player)
+	_heart_music_player.finished.connect(func():
+		if _is_heart_playing:
+			_heart_music_player.play(0.0)
+	)
 
 	_wilhelm_player = AudioStreamPlayer.new()
 	_wilhelm_player.name = "WilhelmPlayer"
@@ -288,6 +292,12 @@ func _load_audio_resources() -> void:
 		_glitter_player.stream = _glitter_stream
 
 	_heart_music_stream = _load_stream(heart_track_path, true)
+	if _heart_music_stream is AudioStreamMP3:
+		(_heart_music_stream as AudioStreamMP3).loop = true
+	elif _heart_music_stream is AudioStreamWAV:
+		(_heart_music_stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_FORWARD
+	elif _heart_music_stream is AudioStreamOggVorbis:
+		(_heart_music_stream as AudioStreamOggVorbis).loop = true
 	if is_instance_valid(_heart_music_player) and _heart_music_stream != null:
 		_heart_music_player.stream = _heart_music_stream
 
