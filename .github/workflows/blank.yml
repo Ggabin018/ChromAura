@@ -62,15 +62,15 @@ jobs:
         include:
           - platform: Windows
             preset: Windows Desktop
-            output: release/Windows/ChromAura.exe
+            output: release/Windows/ #ChromAura.exe
 
           - platform: Linux
             preset: Linux
-            output: release/Linux/ChromAura.x86_64
+            output: release/Linux/ #ChromAura.x86_64
 
           - platform: Mac
             preset: macOS
-            output: release/MacOS/ChromAura.app
+            output: release/MacOS/ #ChromAura.app
 
     steps:
       - name: Checkout
