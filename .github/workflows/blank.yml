@@ -88,6 +88,15 @@ jobs:
           godot --version
           dotnet --version
 
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            libgles2 \
+            libgl1 \
+            libegl1 \
+            libusb-1.0-0
+
       - name: Import project
         run: |
           godot --headless --path chrom-aura --editor --quit
