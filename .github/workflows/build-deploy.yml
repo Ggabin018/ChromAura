@@ -4,8 +4,13 @@ on:
   push:
     branches:
       - main
+      - deploy
+    tags:
+      - 'v*'
 
   pull_request:
+    branches:
+        - main
 
 jobs:
   build:
@@ -18,15 +23,15 @@ jobs:
         include:
           - platform: Windows
             preset: Windows Desktop
-            output: release/Windows/ChromAura.exe
+            output: release/ChromAura_Windows.zip
 
           - platform: Linux
             preset: Linux
-            output: release/Linux/ChromAura.x86_64
+            output: release/ChromAura_Linux.zip
 
-          - platform: Mac
+          - platform: MacOS
             preset: macOS
-            output: release/MacOS/ChromAura.app
+            output: release/ChromAura_MacOS.zip
 
     steps:
       - name: Checkout
@@ -68,5 +73,46 @@ jobs:
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}
-          path: ${{ matrix.output }}
+          name: ChromAura-${{ matrix.platform }}
+          path: chrom-aura/${{ matrix.output }}
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: ChromAura-Windows
+          path: release
+
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: ChromAura-Linux
+          path: release
+
+      - name: Download MacOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: ChromAura-MacOS
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/ChromAura_Windows.zip
+            release/ChromAura_Linux.zip
+            release/ChromAura_MacOS.zip
+            ChromAura_Documentation.pdf
+          generate_release_notes: true
