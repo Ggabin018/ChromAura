@@ -375,12 +375,6 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 				pointing_fingers.append(detection.anchor_uv)
 				_track_thumb_up_times.erase(detection.track_id)
 				_last_global_thumb_up_time_ms = -999999
-		elif detection.gesture == HandGestureEngine.FINGER_HEART:
-			heart_detections.append({
-				"anchor": detection.anchor_uv,
-				"gesture": detection.gesture,
-				"scale_hint": 0.8,
-			})
 		elif detection.gesture == HandGestureEngine.TWO_HAND_HEART:
 			heart_detections.append({
 				"anchor": detection.anchor_uv,
@@ -431,10 +425,10 @@ func _apply_hand_result(observations: Array[HandObservation], timestamp_ms: int)
 
 		var up_score: float = scores.get(HandGestureEngine.THUMB_UP, 0.0)
 		var down_score: float = scores.get(HandGestureEngine.THUMB_DOWN, 0.0)
-		if up_score >= 0.55:
+		if up_score >= 0.50:
 			_track_thumb_up_times[pose.track_id] = timestamp_ms
 			_last_global_thumb_up_time_ms = timestamp_ms
-		elif down_score >= 0.55:
+		elif down_score >= 0.50:
 			var has_track_up := (
 				_track_thumb_up_times.has(pose.track_id)
 				and (timestamp_ms - _track_thumb_up_times[pose.track_id]) >= 200

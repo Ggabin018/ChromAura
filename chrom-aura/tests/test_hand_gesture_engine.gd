@@ -86,6 +86,21 @@ func _test_static_classification(engine: HandGestureEngine) -> void:
 		"horizontal thumb as thumb down",
 	)
 
+	var closed_fist := _make_pose(&"CLOSED_FIST")
+	var fist_scores := engine.classify_pose(closed_fist)
+	_expect_below(
+		fist_scores,
+		HandGestureEngine.THUMB_UP,
+		engine.maintenance_threshold,
+		"closed fist as thumb up",
+	)
+	_expect_below(
+		fist_scores,
+		HandGestureEngine.THUMB_DOWN,
+		engine.maintenance_threshold,
+		"closed fist as thumb down",
+	)
+
 	var two_finger_pointing := _make_pose(HandGestureEngine.INDEX_MIDDLE_POINTING)
 	var two_finger_scores := engine.classify_pose(two_finger_pointing)
 	_expect_score(
@@ -831,3 +846,67 @@ func _test_heart_events(engine: HandGestureEngine) -> void:
 	engine.process_observations(no_obs, 390)
 	two_ends = ended.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
 	_assert(two_ends.size() == 1, "TWO_HAND_HEART ended should be emitted after release delay")
+
+	# Test 3: Rejection of praying hands / joined hands ("paumes collées")
+	engine.clear()
+	started.clear()
+	updated.clear()
+	ended.clear()
+
+	var pray_left := _make_pose(HandGestureEngine.INDEX_POINTING)
+	pray_left.handedness = &"LEFT"
+	pray_left.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.49, 0.45)
+	pray_left.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.49, 0.60)
+	pray_left.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.49, 0.50)
+	pray_left.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.47, 0.55)
+	pray_left.update_geometry()
+
+	var pray_right := _make_pose(HandGestureEngine.INDEX_POINTING)
+	pray_right.handedness = &"RIGHT"
+	pray_right.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.51, 0.45)
+	pray_right.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.51, 0.60)
+	pray_right.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.51, 0.50)
+	pray_right.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.53, 0.55)
+	pray_right.update_geometry()
+
+	var pray_obs: Array[HandObservation] = [
+		_observation_from_pose(pray_left),
+		_observation_from_pose(pray_right),
+	]
+
+	engine.process_observations(pray_obs, 0)
+	engine.process_observations(pray_obs, engine.activation_delay_ms + 50)
+	var pray_starts := started.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(pray_starts.is_empty(), "praying hands falsely triggered TWO_HAND_HEART")
+
+	# Test 4: Arched heart where index tip touches DIP
+	engine.clear()
+	started.clear()
+
+	var arched_left := _make_pose(HandGestureEngine.INDEX_POINTING)
+	arched_left.handedness = &"LEFT"
+	arched_left.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.50, 0.44)
+	arched_left.landmarks_2d[HandGestureEngine.INDEX_DIP] = Vector2(0.47, 0.45)
+	arched_left.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.49, 0.60)
+	arched_left.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.42, 0.50)
+	arched_left.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.35, 0.55)
+	arched_left.update_geometry()
+
+	var arched_right := _make_pose(HandGestureEngine.INDEX_POINTING)
+	arched_right.handedness = &"RIGHT"
+	arched_right.landmarks_2d[HandGestureEngine.INDEX_TIP] = Vector2(0.47, 0.46)
+	arched_right.landmarks_2d[HandGestureEngine.INDEX_DIP] = Vector2(0.53, 0.47)
+	arched_right.landmarks_2d[HandGestureEngine.THUMB_TIP] = Vector2(0.51, 0.60)
+	arched_right.landmarks_2d[HandGestureEngine.INDEX_MCP] = Vector2(0.58, 0.50)
+	arched_right.landmarks_2d[HandGestureEngine.PINKY_MCP] = Vector2(0.65, 0.55)
+	arched_right.update_geometry()
+
+	var arched_obs: Array[HandObservation] = [
+		_observation_from_pose(arched_left),
+		_observation_from_pose(arched_right),
+	]
+
+	engine.process_observations(arched_obs, 0)
+	engine.process_observations(arched_obs, engine.activation_delay_ms + 10)
+	var arched_starts := started.filter(func(d: GestureDetection) -> bool: return d.gesture == HandGestureEngine.TWO_HAND_HEART)
+	_assert(arched_starts.size() == 1, "arched index heart was not detected")
