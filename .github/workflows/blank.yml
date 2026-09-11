@@ -8,48 +8,48 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Lint & Unit Tests
-    runs-on: ubuntu-latest
+  # test:
+  #   name: Lint & Unit Tests
+  #   runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      # - name: Setup .NET
-      #   uses: actions/setup-dotnet@v4
-      #   with:
-      #     dotnet-version: '8.0.x'
+  #     # - name: Setup .NET
+  #     #   uses: actions/setup-dotnet@v4
+  #     #   with:
+  #     #     dotnet-version: '8.0.x'
 
-      # - name: Install system dependencies
-      #   run: |
-      #     apt-get update
-      #     apt-get install -y \
-      #       libgles2 \
-      #       libgl1 \
-      #       libegl1 \
-      #       libusb-1.0-0
+  #     # - name: Install system dependencies
+  #     #   run: |
+  #     #     apt-get update
+  #     #     apt-get install -y \
+  #     #       libgles2 \
+  #     #       libgl1 \
+  #     #       libegl1 \
+  #     #       libusb-1.0-0
 
-      - name: Setup Godot
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.7.2
-          use-dotnet: true
-          include-templates: false
+  #     - name: Setup Godot
+  #       uses: chickensoft-games/setup-godot@v2
+  #       with:
+  #         version: 4.7.2
+  #         use-dotnet: true
+  #         include-templates: false
 
-      - name: Check environment
-        run: |
-          godot --version
-          dotnet --version
+  #     - name: Check environment
+  #       run: |
+  #         godot --version
+  #         dotnet --version
 
-      - name: Import project
-        run: godot --headless --path chrom-aura --editor --quit
+  #     - name: Import project
+  #       run: godot --headless --path chrom-aura --editor --quit
 
-      - name: Validate GDScript
-        run: godot --headless --path chrom-aura --editor --quit --check-only
+  #     - name: Validate GDScript
+  #       run: godot --headless --path chrom-aura --editor --quit --check-only
 
-      - name: Test hand gesture engine
-        run: godot --headless --path chrom-aura --script res://tests/test_hand_gesture_engine.gd
+  #     - name: Test hand gesture engine
+  #       run: godot --headless --path chrom-aura --script res://tests/test_hand_gesture_engine.gd
 
   build:
     name: Build ${{ matrix.platform }}

@@ -17,7 +17,7 @@ extends Control
 @export_range(0.2, 1.5, 0.05) var debug_body_near_scale := 1.05
 @export var debug_body_arm_extended := true
 
-@onready var depth_camera = get_node_or_null("DepthCameraNode")
+@onready var depth_camera: DepthCameraNode = get_node_or_null("DepthCameraNode")
 @onready var hand_overlay: HandOverlay = get_node_or_null("HandDetectionLayer/HandOverlay")
 @onready var gesture_engine: HandGestureEngine = get_node_or_null("HandGestureEngine")
 @onready var hand_detection_layer: CanvasLayer = get_node_or_null("HandDetectionLayer")
