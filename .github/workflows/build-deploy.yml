@@ -111,4 +111,5 @@ jobs:
             release/ChromAura_Windows.zip
             release/ChromAura_Linux.zip
             release/ChromAura_MacOS.zip
+            ChromAura_Documentation.pdf
           generate_release_notes: true
