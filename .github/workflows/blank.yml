@@ -16,11 +16,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            libgles2 \
+            libgl1 \
+            libegl1 \
+            libusb-1.0-0
+
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
           version: 4.7.2
-          include-export-templates: false
+          use-dotnet: true
+          include-templates: false
+
+      - name: Check environment
+        run: |
+          godot --version
+          dotnet --version
 
       - name: Import project
         run: godot --headless --path chrom-aura --editor --quit
@@ -42,11 +62,15 @@ jobs:
         include:
           - platform: Windows
             preset: Windows Desktop
-            output: build/windows/game.exe
+            output: release/Windows/ChromAura.exe
 
           - platform: Linux
             preset: Linux
-            output: build/linux/game.x86_64
+            output: release/Linux/ChromAura.x86_64
+
+          - platform: Mac
+            preset: macOS
+            output: release/MacOS/ChromAura.app
 
     steps:
       - name: Checkout
@@ -55,8 +79,14 @@ jobs:
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.5.1
-          include-export-templates: true
+          version: 4.7.2
+          use-dotnet: true
+          include-templates: true
+  
+      - name: Check environment
+        run: |
+          godot --version
+          dotnet --version
 
       - name: Import project
         run: |
@@ -68,10 +98,7 @@ jobs:
 
       - name: Export
         run: |
-          godot --headless \
-            --export-release \
-            "${{ matrix.preset }}" \
-            "${{ matrix.output }}"
+          godot --headless --export-release "${{ matrix.preset }}" "${{ matrix.output }}"
 
       - name: Upload build
         uses: actions/upload-artifact@v4
