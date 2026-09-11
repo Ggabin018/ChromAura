@@ -68,6 +68,15 @@ public partial class particles : CanvasLayer
 		set => _gunParticleManager.ProjectileSpeedMax = value;
 	}
 
+	[ExportSubgroup("Réaction du fond")]
+	[Export] public float GunBackgroundPushRadius { get; set; } = 120.0f;
+	[Export] public float GunBackgroundPushStrength { get; set; } = 210.0f;
+	[Export] public float GunBackgroundPushLifetime { get; set; } = 0.45f;
+	[Export] public float GunBackgroundPushTravelSpeed { get; set; } = 1200.0f;
+	[Export(PropertyHint.Range, "0,1,0.01")]
+	public float GunBackgroundPushForwardBias { get; set; } = 0.20f;
+	[Export] public float GunBackgroundPushMaxSpeed { get; set; } = 260.0f;
+
 	[ExportGroup("Durées de vie")]
 	/// <summary>Durée de vie (secondes) des particules de tracé de dessin persistant.</summary>
 	[Export] public float TrailLifetime { get; set; } = 8.0f;
@@ -300,6 +309,12 @@ public partial class particles : CanvasLayer
 			AnchorWanderRadius = AmbientAnchorWanderRadius,
 			ReturnDelay = AmbientReturnDelay,
 			AmbientOpacity = AmbientParticleOpacity,
+			GunPushRadius = GunBackgroundPushRadius,
+			GunPushStrength = GunBackgroundPushStrength,
+			GunPushLifetime = GunBackgroundPushLifetime,
+			GunPushTravelSpeed = GunBackgroundPushTravelSpeed,
+			GunPushForwardBias = GunBackgroundPushForwardBias,
+			GunPushMaxSpeed = GunBackgroundPushMaxSpeed,
 			PreserveAspectRatio = PreserveAspectRatio,
 		};
 		AddChild(_ambientFireflies);
@@ -381,7 +396,7 @@ public partial class particles : CanvasLayer
 			_elapsedTime,
 			NormalizedToScreen,
 			GetPaletteIndexForTrack,
-			(trackId, pos, dir) => EmitSignal(SignalName.GunShotFired, trackId, pos, dir)
+			(trackId, pos, dir) => HandleGunShotFired(trackId, pos, dir)
 		);
 
 		// 2. Émission des particules de silhouette corporelle
@@ -514,8 +529,14 @@ public partial class particles : CanvasLayer
 			trackId,
 			NormalizedToScreen,
 			GetPaletteIndexForTrack,
-			(tid, screenPos, dir) => EmitSignal(SignalName.GunShotFired, tid, screenPos, dir)
+			(tid, screenPos, dir) => HandleGunShotFired(tid, screenPos, dir)
 		);
+	}
+
+	private void HandleGunShotFired(int trackId, Vector2 screenPos, Vector2 direction)
+	{
+		_ambientFireflies?.AddGunShotPush(screenPos, direction);
+		EmitSignal(SignalName.GunShotFired, trackId, screenPos, direction);
 	}
 
 	/// <summary>

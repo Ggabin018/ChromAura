@@ -36,8 +36,16 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		public Vector2 Velocity { get; }
 	}
 
+	private struct GunPush
+	{
+		public Vector2 Origin;
+		public Vector2 Direction;
+		public float Age;
+	}
+
 	private readonly RandomNumberGenerator _random = new();
 	private readonly List<BodyMotion> _bodyMotions = new();
+	private readonly List<GunPush> _gunPushes = new();
 	private Firefly[] _fireflies = Array.Empty<Firefly>();
 	private float[] _density = Array.Empty<float>();
 	private float[] _scratch = Array.Empty<float>();
@@ -64,6 +72,12 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	public float ReturnWhileBodies { get; set; } = 0.35f;
 	public float AnchorWanderRadius { get; set; } = 18.0f;
 	public float ReturnDelay { get; set; } = 0.4f;
+	public float GunPushRadius { get; set; } = 120.0f;
+	public float GunPushStrength { get; set; } = 210.0f;
+	public float GunPushLifetime { get; set; } = 0.45f;
+	public float GunPushTravelSpeed { get; set; } = 1200.0f;
+	public float GunPushForwardBias { get; set; } = 0.20f;
+	public float GunPushMaxSpeed { get; set; } = 260.0f;
 	public bool PreserveAspectRatio { get; set; } = true;
 
 	public void Initialize(bool additiveBlending)
@@ -125,6 +139,22 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		BuildDensityField();
 	}
 
+	/// <summary>
+	/// Ajoute une impulsion de répulsion douce qui accompagne visuellement un tir Finger Gun.
+	/// </summary>
+	public void AddGunShotPush(Vector2 screenPosition, Vector2 direction)
+	{
+		if (direction.LengthSquared() < 0.0001f)
+			return;
+
+		_gunPushes.Add(new GunPush
+		{
+			Origin = screenPosition,
+			Direction = direction.Normalized(),
+			Age = 0.0f,
+		});
+	}
+
 	public override void _Process(double delta)
 	{
 		if (_fireflies.Length == 0 || Multimesh == null)
@@ -138,8 +168,9 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		_elapsedTime += delta;
 		var dt = Mathf.Min((float)delta, 1.0f / 20.0f);
 		UpdateReturnState(dt);
+		UpdateGunPushes(dt);
 		var damping = Mathf.Exp(-1.25f * dt);
-		var maxSpeed = Mathf.Max(AmbientSpeed * 6.0f, 40.0f);
+		var maxSpeed = Mathf.Max(Mathf.Max(AmbientSpeed * 6.0f, 40.0f), GunPushMaxSpeed);
 
 		for (var i = 0; i < _fireflies.Length; i++)
 		{
@@ -153,6 +184,7 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 			var acceleration = wander;
 			AddAnchorForce(firefly, viewportSize, time, ref acceleration);
 			AddSilhouetteForces(firefly.Position, viewportSize, ref acceleration);
+			AddGunShotForces(firefly.Position, ref acceleration);
 
 			firefly.Velocity = firefly.Velocity * damping + acceleration * dt;
 			if (firefly.Velocity.LengthSquared() > maxSpeed * maxSpeed)
@@ -380,6 +412,57 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 		}
 
 		(_density, _scratch) = (_scratch, _density);
+	}
+
+	private void UpdateGunPushes(float delta)
+	{
+		for (var i = _gunPushes.Count - 1; i >= 0; i--)
+		{
+			var push = _gunPushes[i];
+			push.Age += delta;
+			if (push.Age >= Mathf.Max(GunPushLifetime, 0.01f))
+			{
+				_gunPushes.RemoveAt(i);
+				continue;
+			}
+
+			_gunPushes[i] = push;
+		}
+	}
+
+	private void AddGunShotForces(Vector2 particlePosition, ref Vector2 acceleration)
+	{
+		if (_gunPushes.Count == 0 || GunPushRadius <= 0.0f || GunPushStrength <= 0.0f)
+			return;
+
+		var lifetime = Mathf.Max(GunPushLifetime, 0.01f);
+		var radius = Mathf.Max(GunPushRadius, 1.0f);
+		var radiusSquared = radius * radius;
+		var forwardBias = Mathf.Clamp(GunPushForwardBias, 0.0f, 1.0f);
+
+		for (var i = 0; i < _gunPushes.Count; i++)
+		{
+			var push = _gunPushes[i];
+			var progress = Mathf.Clamp(push.Age / lifetime, 0.0f, 1.0f);
+			var center = push.Origin + push.Direction * (GunPushTravelSpeed * push.Age);
+			var offset = particlePosition - center;
+			var distanceSquared = offset.LengthSquared();
+			if (distanceSquared >= radiusSquared)
+				continue;
+
+			var distance = Mathf.Sqrt(distanceSquared);
+			var radial = distance > 0.001f
+				? offset / distance
+				: new Vector2(-push.Direction.Y, push.Direction.X);
+
+			var spatialFalloff = 1.0f - Mathf.SmoothStep(0.0f, 1.0f, distance / radius);
+			var attack = Mathf.SmoothStep(0.0f, 0.16f, progress);
+			var release = 1.0f - Mathf.SmoothStep(0.35f, 1.0f, progress);
+			var temporalFalloff = attack * release;
+			var forceDirection = radial.Lerp(push.Direction, forwardBias).Normalized();
+
+			acceleration += forceDirection * (GunPushStrength * spatialFalloff * temporalFalloff);
+		}
 	}
 
 	private void AddSilhouetteForces(Vector2 screenPosition, Vector2 viewportSize, ref Vector2 acceleration)
