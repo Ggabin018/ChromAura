@@ -219,19 +219,19 @@ texture = ExtResource("7_4c57u")
 expand_mode = 1
 stretch_mode = 5
 
-[node name="Rock" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction"]
+[node name="Rock" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=1982909652]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 14
 alignment = 1
 
-[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Rock"]
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Rock" unique_id=1848485247]
 layout_mode = 2
 theme_override_font_sizes/font_size = 28
 text = "Gravité des dessins"
 vertical_alignment = 1
 
-[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Rock"]
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Rock" unique_id=1642431688]
 custom_minimum_size = Vector2(36, 42)
 layout_mode = 2
 texture = ExtResource("9_vivmo")

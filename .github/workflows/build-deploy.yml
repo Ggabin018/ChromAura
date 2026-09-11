@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            preset: Windows Desktop
+            output: release/Windows/ChromAura.exe
+
+          - platform: Linux
+            preset: Linux
+            output: release/Linux/ChromAura.x86_64
+
+          - platform: Mac
+            preset: macOS
+            output: release/MacOS/ChromAura.app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.7.2
+          use-dotnet: true
+          include-templates: true
+  
+      - name: Check environment
+        run: |
+          godot --version
+          dotnet --version
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgles2 \
+            libgl1 \
+            libegl1 \
+            libusb-1.0-0
+
+      - name: Import project
+        run: |
+          godot --headless --path chrom-aura --editor --quit
+
+      - name: Create build directory
+        run: |
+          mkdir -p "chrom-aura/$(dirname '${{ matrix.output }}')"
+
+      - name: Export
+        run: |
+          godot --headless --path chrom-aura --export-release "${{ matrix.preset }}" "${{ matrix.output }}"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ matrix.output }}
