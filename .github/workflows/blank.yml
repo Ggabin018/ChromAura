@@ -16,19 +16,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      # - name: Setup .NET
+      #   uses: actions/setup-dotnet@v4
+      #   with:
+      #     dotnet-version: '8.0.x'
 
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y \
-            libgles2 \
-            libgl1 \
-            libegl1 \
-            libusb-1.0-0
+      # - name: Install system dependencies
+      #   run: |
+      #     apt-get update
+      #     apt-get install -y \
+      #       libgles2 \
+      #       libgl1 \
+      #       libegl1 \
+      #       libusb-1.0-0
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
