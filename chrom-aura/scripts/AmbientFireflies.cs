@@ -73,11 +73,11 @@ public sealed partial class AmbientFireflies : MultiMeshInstance2D
 	public float AnchorWanderRadius { get; set; } = 18.0f;
 	public float ReturnDelay { get; set; } = 0.4f;
 	public float GunPushRadius { get; set; } = 120.0f;
-	public float GunPushStrength { get; set; } = 210.0f;
+	public float GunPushStrength { get; set; } = 360.0f;
 	public float GunPushLifetime { get; set; } = 0.45f;
 	public float GunPushTravelSpeed { get; set; } = 1200.0f;
 	public float GunPushForwardBias { get; set; } = 0.20f;
-	public float GunPushMaxSpeed { get; set; } = 260.0f;
+	public float GunPushMaxSpeed { get; set; } = 420.0f;
 	public bool PreserveAspectRatio { get; set; } = true;
 
 	public void Initialize(bool additiveBlending)

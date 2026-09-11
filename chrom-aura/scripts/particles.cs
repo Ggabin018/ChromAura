@@ -70,12 +70,12 @@ public partial class particles : CanvasLayer
 
 	[ExportSubgroup("Réaction du fond")]
 	[Export] public float GunBackgroundPushRadius { get; set; } = 120.0f;
-	[Export] public float GunBackgroundPushStrength { get; set; } = 210.0f;
+	[Export] public float GunBackgroundPushStrength { get; set; } = 360.0f;
 	[Export] public float GunBackgroundPushLifetime { get; set; } = 0.45f;
 	[Export] public float GunBackgroundPushTravelSpeed { get; set; } = 1200.0f;
 	[Export(PropertyHint.Range, "0,1,0.01")]
 	public float GunBackgroundPushForwardBias { get; set; } = 0.20f;
-	[Export] public float GunBackgroundPushMaxSpeed { get; set; } = 260.0f;
+	[Export] public float GunBackgroundPushMaxSpeed { get; set; } = 420.0f;
 
 	[ExportGroup("Durées de vie")]
 	/// <summary>Durée de vie (secondes) des particules de tracé de dessin persistant.</summary>
