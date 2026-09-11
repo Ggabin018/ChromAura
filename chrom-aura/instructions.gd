@@ -27,6 +27,8 @@ var easter_egg_probability: float = 0.3
 @export var popup_corner_radius: int = 26
 
 @onready var instruction_container: Control = $DrawInstruction
+@onready var gravity_status: PanelContainer = $GravityStatus
+@onready var gravity_status_label: Label = $GravityStatus/Content/Label
 
 var rng := RandomNumberGenerator.new()
 var hide_egg_timer := Timer.new()
@@ -38,6 +40,10 @@ var popup_style: StyleBoxFlat
 var instruction_font: Font
 var popup_base_position := Vector2.ZERO
 var popup_tween: Tween
+var gravity_status_style: StyleBoxFlat
+var gravity_status_tween: Tween
+var gravity_status_initialized := false
+var gravity_status_enabled := false
 var last_accent_index := -1
 var accent_colors: Array[Color] = [
 	Color("5CE1E6"), # cyan
@@ -54,6 +60,7 @@ func _ready() -> void:
 
 	_setup_popup_style()
 	_setup_instruction_font()
+	_setup_gravity_status_style()
 
 	for child in instruction_container.get_children():
 		if child is BoxContainer:
@@ -62,6 +69,10 @@ func _ready() -> void:
 	instruction_container.visible = false
 	instruction_container.modulate.a = 0.0
 	instruction_container.scale = Vector2(0.96, 0.96)
+	_apply_gravity_status(false)
+	gravity_status.visible = false
+	gravity_status.modulate.a = 0.0
+	gravity_status_initialized = true
 
 	hide_egg_timer.one_shot = true
 	hide_egg_timer.timeout.connect(_hide_easter_egg)
@@ -110,6 +121,67 @@ func _setup_popup_style() -> void:
 
 func _setup_instruction_font() -> void:
 	instruction_font = INSTRUCTION_FONT
+
+
+func _setup_gravity_status_style() -> void:
+	gravity_status_style = StyleBoxFlat.new()
+	gravity_status_style.bg_color = popup_background_color
+	gravity_status_style.border_width_left = popup_border_width
+	gravity_status_style.border_width_top = popup_border_width
+	gravity_status_style.border_width_right = popup_border_width
+	gravity_status_style.border_width_bottom = popup_border_width
+	gravity_status_style.shadow_size = 9
+	gravity_status_style.shadow_offset = Vector2.ZERO
+	gravity_status_style.corner_radius_top_left = 14
+	gravity_status_style.corner_radius_top_right = 14
+	gravity_status_style.corner_radius_bottom_left = 14
+	gravity_status_style.corner_radius_bottom_right = 14
+	gravity_status_style.corner_detail = 12
+	gravity_status_style.anti_aliasing = true
+	gravity_status_style.anti_aliasing_size = 1.5
+	gravity_status_style.content_margin_left = 12.0
+	gravity_status_style.content_margin_right = 12.0
+	gravity_status_style.content_margin_top = 2.0
+	gravity_status_style.content_margin_bottom = 2.0
+	gravity_status.add_theme_stylebox_override("panel", gravity_status_style)
+
+
+func set_gravity_status(enabled: bool) -> void:
+	if gravity_status_enabled == enabled and gravity_status_initialized:
+		return
+
+	if gravity_status_tween != null and gravity_status_tween.is_valid():
+		gravity_status_tween.kill()
+
+	if not gravity_status_initialized:
+		_apply_gravity_status(enabled)
+		gravity_status_initialized = true
+		return
+
+	_apply_gravity_status(enabled)
+	gravity_status.visible = true
+	gravity_status.modulate.a = 0.0
+	gravity_status_tween = create_tween()
+	gravity_status_tween.tween_property(gravity_status, "modulate:a", 1.0, 0.20)
+	gravity_status_tween.tween_interval(3.0)
+	gravity_status_tween.tween_property(gravity_status, "modulate:a", 0.0, 0.20)
+	gravity_status_tween.tween_callback(func() -> void:
+		gravity_status.visible = false
+	)
+
+
+func _apply_gravity_status(enabled: bool) -> void:
+	gravity_status_enabled = enabled
+	var accent := Color("B7F34A") if enabled else Color("FF75C3")
+	gravity_status_style.border_color = accent
+	gravity_status_style.shadow_color = Color(accent.r, accent.g, accent.b, 0.38)
+	gravity_status_label.text = "Gravité ON" if enabled else "Gravité OFF"
+	gravity_status_label.add_theme_font_override("font", instruction_font)
+	gravity_status_label.add_theme_color_override("font_color", accent)
+	gravity_status_label.add_theme_color_override("font_shadow_color", Color(accent.r, accent.g, accent.b, 0.42))
+	gravity_status_label.add_theme_constant_override("shadow_outline_size", 2)
+	gravity_status_label.add_theme_constant_override("shadow_offset_x", 0)
+	gravity_status_label.add_theme_constant_override("shadow_offset_y", 0)
 
 
 func _apply_instruction_style(accent: Color) -> void:
