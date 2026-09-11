@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - deploy
     tags:
       - 'v*'
 
@@ -22,7 +21,6 @@ jobs:
           - platform: Windows
             preset: Windows Desktop
             output: release/ChromAura_Windows.zip
-            
 
           - platform: Linux
             preset: Linux
@@ -73,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ChromAura-${{ matrix.platform }}
-          path: ${{ matrix.output }}
+          path: chrom-aura/${{ matrix.output }}
 
   release:
     name: Create GitHub Release
@@ -97,7 +95,7 @@ jobs:
           name: ChromAura-Linux
           path: release
 
-      - name: Download Linux build
+      - name: Download MacOS build
         uses: actions/download-artifact@v4
         with:
           name: ChromAura-MacOS
