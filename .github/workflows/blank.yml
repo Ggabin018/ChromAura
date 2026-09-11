@@ -68,9 +68,9 @@ jobs:
             preset: Linux
             output: release/Linux/ChromAura.x86_64
 
-          - platform: Mac
-            preset: macOS
-            output: release/MacOS/ChromAura.app
+          # - platform: Mac
+          #   preset: macOS
+          #   output: release/MacOS/ChromAura.app
 
     steps:
       - name: Checkout
@@ -90,8 +90,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          apt-get update
-          apt-get install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             libgles2 \
             libgl1 \
             libegl1 \
@@ -113,4 +113,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
-          path: build/${{ matrix.platform == 'Windows' && 'windows' || 'linux' }}/
+          path: ${{ matrix.output }}
