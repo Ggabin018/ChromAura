@@ -58,6 +58,14 @@ const MIN_PALM_SCALE_UV := 0.02
 @export_range(0, 1000, 10) var release_delay_ms := 180
 @export_range(0.0, 0.5, 0.01) var switch_margin := 0.08
 
+@export_group("Two Hand Heart")
+@export_range(0.0, 1.0, 0.01) var heart_activation_threshold := 0.60
+@export_range(0.0, 1.0, 0.01) var heart_maintenance_threshold := 0.45
+@export_range(0.5, 2.5, 0.05) var heart_max_touch_distance := 1.35
+@export_range(0.05, 0.5, 0.01) var heart_min_vertical_delta := 0.08
+@export_range(0.4, 1.5, 0.05) var heart_min_palm_distance := 0.72
+@export_range(0.4, 1.5, 0.05) var heart_min_knuckle_distance := 0.75
+
 @export_group("Tracking")
 @export_range(0, 2000, 10) var lost_track_timeout_ms := 300
 
@@ -271,31 +279,54 @@ func classify_pose(pose: HandPose) -> Dictionary[StringName, float]:
 	var thumb_dir_combined: Vector2 = thumb_delta_mcp + thumb_delta_ip
 	var thumb_direction: Vector2 = thumb_dir_combined.normalized() if not thumb_dir_combined.is_zero_approx() else Vector2.UP
 	var upward_alignment := thumb_direction.dot(Vector2.UP)
-	var upward_score := _smoothstep(cos(deg_to_rad(70.0)), cos(deg_to_rad(30.0)), upward_alignment)
+	var upward_score := _smoothstep(cos(deg_to_rad(75.0)), cos(deg_to_rad(35.0)), upward_alignment)
 	var downward_alignment := thumb_direction.dot(Vector2.DOWN)
 	var downward_score := _smoothstep(cos(deg_to_rad(75.0)), cos(deg_to_rad(35.0)), downward_alignment)
 
-	var thumb_shape_score := 0.45 * thumb_extended + 0.55 * all_fingers_folded
-	# Strictly enforce closed fist for thumbs up / thumbs down:
-	# If index or middle finger is extended, or non-thumb fingers are not folded,
-	# or gun / pointing is detected, thumb up/down MUST BE ZERO.
+	# Thumb span: in a true thumb gesture, the thumb tip is deployed away from the thumb base (MCP)
+	var thumb_span_2d: float = (
+		pose.landmarks_2d[THUMB_TIP].distance_to(pose.landmarks_2d[THUMB_MCP])
+		/ maxf(pose.palm_scale_uv, 0.01)
+	)
+	var thumb_span_score := _smoothstep(0.25, 0.50, thumb_span_2d)
+
+	var thumb_shape_score := (0.35 * thumb_extended + 0.65 * all_fingers_folded) * thumb_span_score
+	# Strictly enforce closed fist:
+	# Non-thumb fingers must be folded, pointing/gun cannot be active, and thumb cannot be completely folded.
 	if (
-		index_extended > 0.25
-		or middle_extended > 0.25
-		or all_fingers_folded < 0.40
-		or thumb_extended < 0.40
-		or finger_gun_score > 0.20
-		or pointing_score > 0.30
-		or two_finger_pointing_score > 0.30
+		index_extended > 0.50
+		or middle_extended > 0.50
+		or all_fingers_folded < 0.35
+		or thumb_extended < 0.30
+		or finger_gun_score >= 0.65
+		or pointing_score >= 0.60
+		or two_finger_pointing_score >= 0.60
 	):
 		thumb_shape_score = 0.0
 
-	var thumb_up_score := thumb_shape_score * (0.45 + 0.55 * upward_score)
-	if upward_alignment <= 0.15:
+	# 2D Clearance check:
+	# In a closed fist, the PIP knuckles (bent fingers) form the top edge of the fist, and the thumb tip
+	# rests at or below this edge (up_clearance_uv <= 0.0).
+	# In a real thumbs up, the thumb tip protrudes clearly ABOVE the top of the fist (up_clearance_uv >= 0.20).
+	var fist_top_uv_y: float = minf(
+		minf(pose.landmarks_2d[INDEX_PIP].y, pose.landmarks_2d[MIDDLE_PIP].y),
+		minf(pose.landmarks_2d[INDEX_MCP].y, pose.landmarks_2d[MIDDLE_MCP].y)
+	)
+	var up_clearance_uv := (fist_top_uv_y - pose.landmarks_2d[THUMB_TIP].y) / maxf(pose.palm_scale_uv, 0.01)
+	var up_clearance_score := _smoothstep(0.04, 0.22, up_clearance_uv)
+
+	var thumb_up_score := thumb_shape_score * up_clearance_score * (0.35 + 0.65 * upward_score)
+	if upward_alignment <= 0.15 or up_clearance_uv < 0.04:
 		thumb_up_score = 0.0
 
-	var thumb_down_score := thumb_shape_score * (0.45 + 0.55 * downward_score)
-	if downward_alignment <= 0.15:
+	# In a real thumbs down, the thumb tip protrudes clearly downwards from the thumb base (MCP).
+	var thumb_down_extension: float = (
+		pose.landmarks_2d[THUMB_TIP].y - pose.landmarks_2d[THUMB_MCP].y
+	) / maxf(pose.palm_scale_uv, 0.01)
+	var down_clearance_score := _smoothstep(0.15, 0.45, thumb_down_extension)
+
+	var thumb_down_score := thumb_shape_score * down_clearance_score * (0.35 + 0.65 * downward_score)
+	if downward_alignment <= 0.15 or thumb_down_extension < 0.15:
 		thumb_down_score = 0.0
 
 	if finger_gun_score >= 0.70:
@@ -701,8 +732,9 @@ func _evaluate_two_hand_heart(timestamp_ms: int) -> void:
 				if (
 					track_a.pose.landmarks_2d.size() != HandPose.LANDMARK_COUNT
 					or track_b.pose.landmarks_2d.size() != HandPose.LANDMARK_COUNT
-					or track_a.last_seen_ms != timestamp_ms
-					or track_b.last_seen_ms != timestamp_ms
+					or (track_a.last_seen_ms != timestamp_ms and track_b.last_seen_ms != timestamp_ms)
+					or absi(timestamp_ms - track_a.last_seen_ms) > 120
+					or absi(timestamp_ms - track_b.last_seen_ms) > 120
 				):
 					continue
 
@@ -710,18 +742,70 @@ func _evaluate_two_hand_heart(timestamp_ms: int) -> void:
 					(track_a.pose.palm_scale_uv + track_b.pose.palm_scale_uv) * 0.5,
 					MIN_PALM_SCALE_UV,
 				)
-				var thumb_dist: float = track_a.pose.landmarks_2d[THUMB_TIP].distance_to(
-					track_b.pose.landmarks_2d[THUMB_TIP]
+
+				var palm_dist := (
+					track_a.pose.palm_center_uv.distance_to(track_b.pose.palm_center_uv) / avg_scale
 				)
-				var index_dist: float = track_a.pose.landmarks_2d[INDEX_TIP].distance_to(
-					track_b.pose.landmarks_2d[INDEX_TIP]
+				var index_mcp_dist := (
+					track_a.pose.landmarks_2d[INDEX_MCP].distance_to(track_b.pose.landmarks_2d[INDEX_MCP])
+					/ avg_scale
+				)
+				var wrist_dist := (
+					track_a.pose.landmarks_2d[WRIST].distance_to(track_b.pose.landmarks_2d[WRIST])
+					/ avg_scale
+				)
+				var pinky_mcp_dist := (
+					track_a.pose.landmarks_2d[PINKY_MCP].distance_to(track_b.pose.landmarks_2d[PINKY_MCP])
+					/ avg_scale
+				)
+				var middle_tip_dist := (
+					track_a.pose.landmarks_2d[MIDDLE_TIP].distance_to(track_b.pose.landmarks_2d[MIDDLE_TIP])
+					/ avg_scale
+				)
+
+				# Reject joined hands / praying hands ("mains jointes avec paumes collées"):
+				# In praying hands, palms and knuckles are pressed flat together.
+				# In a true heart, the hands form a hollow loop: palms and knuckles are spaced apart.
+				var is_praying_hands := (
+					palm_dist < heart_min_palm_distance
+					or index_mcp_dist < heart_min_knuckle_distance
+					or pinky_mcp_dist < 0.85
+				)
+				if is_praying_hands or palm_dist > 4.5:
+					continue
+
+				# Index contact: allow tip-to-tip, tip-to-DIP, or DIP-to-DIP
+				var index_dist: float = minf(
+					track_a.pose.landmarks_2d[INDEX_TIP].distance_to(track_b.pose.landmarks_2d[INDEX_TIP]),
+					minf(
+						track_a.pose.landmarks_2d[INDEX_TIP].distance_to(track_b.pose.landmarks_2d[INDEX_DIP]),
+						minf(
+							track_a.pose.landmarks_2d[INDEX_DIP].distance_to(track_b.pose.landmarks_2d[INDEX_TIP]),
+							track_a.pose.landmarks_2d[INDEX_DIP].distance_to(track_b.pose.landmarks_2d[INDEX_DIP])
+						)
+					)
+				)
+				# Thumb contact: allow tip-to-tip, tip-to-IP, or IP-to-tip
+				var thumb_dist: float = minf(
+					track_a.pose.landmarks_2d[THUMB_TIP].distance_to(track_b.pose.landmarks_2d[THUMB_TIP]),
+					minf(
+						track_a.pose.landmarks_2d[THUMB_TIP].distance_to(track_b.pose.landmarks_2d[THUMB_IP]),
+						track_a.pose.landmarks_2d[THUMB_IP].distance_to(track_b.pose.landmarks_2d[THUMB_TIP])
+					)
 				)
 
 				var norm_thumb_dist := thumb_dist / avg_scale
 				var norm_index_dist := index_dist / avg_scale
 
-				var thumb_touch := 1.0 - _smoothstep(0.35, 1.45, norm_thumb_dist)
-				var index_touch := 1.0 - _smoothstep(0.35, 1.45, norm_index_dist)
+				if (
+					norm_thumb_dist > heart_max_touch_distance
+					or norm_index_dist > heart_max_touch_distance
+				):
+					continue
+
+				# Two-hand heart: index tips and thumb tips must both touch closely to form the heart loop
+				var thumb_touch := 1.0 - _smoothstep(0.12, heart_max_touch_distance, norm_thumb_dist)
+				var index_touch := 1.0 - _smoothstep(0.12, heart_max_touch_distance, norm_index_dist)
 
 				var index_center := (
 					track_a.pose.landmarks_2d[INDEX_TIP] + track_b.pose.landmarks_2d[INDEX_TIP]
@@ -729,30 +813,30 @@ func _evaluate_two_hand_heart(timestamp_ms: int) -> void:
 				var thumb_center := (
 					track_a.pose.landmarks_2d[THUMB_TIP] + track_b.pose.landmarks_2d[THUMB_TIP]
 				) * 0.5
-				# In UV space, Y goes downward. In a heart, index tips are higher (smaller Y) than thumbs.
+				# In UV space, Y goes downward. In a heart, index tips are clearly higher (smaller Y) than thumbs.
 				var vertical_delta := (thumb_center.y - index_center.y) / avg_scale
-				var vertical_score := _smoothstep(0.10, 0.50, vertical_delta)
+				if vertical_delta < heart_min_vertical_delta:
+					continue
 
-				var palm_dist := (
-					track_a.pose.palm_center_uv.distance_to(track_b.pose.palm_center_uv) / avg_scale
-				)
-				var palm_proximity := 1.0 - _smoothstep(1.5, 4.5, palm_dist)
+				var vertical_score := _smoothstep(heart_min_vertical_delta, 0.40, vertical_delta)
+				var palm_proximity := 1.0 - _smoothstep(1.0, 4.0, palm_dist)
+
+				if thumb_touch < 0.15 or index_touch < 0.15 or vertical_score < 0.10:
+					continue
 
 				var pair_score := (
-					0.35 * index_touch
-					+ 0.35 * thumb_touch
-					+ 0.20 * vertical_score
-					+ 0.10 * palm_proximity
+					0.38 * index_touch
+					+ 0.38 * thumb_touch
+					+ 0.18 * vertical_score
+					+ 0.06 * palm_proximity
 				)
-				if norm_thumb_dist > 1.65 or norm_index_dist > 1.65 or vertical_delta < 0.04:
-					pair_score *= 0.10
 
 				if pair_score > best_score:
 					best_score = pair_score
 					best_anchor = (index_center + thumb_center) * 0.5
 
 	if not _two_hand_heart_active:
-		if best_score >= activation_threshold:
+		if best_score >= heart_activation_threshold:
 			if not _two_hand_heart_candidate:
 				_two_hand_heart_candidate = true
 				_two_hand_heart_candidate_since_ms = timestamp_ms
@@ -778,7 +862,7 @@ func _evaluate_two_hand_heart(timestamp_ms: int) -> void:
 			_two_hand_heart_candidate_since_ms = -1
 	else:
 		_two_hand_heart_score = best_score
-		if best_score >= maintenance_threshold:
+		if best_score >= heart_maintenance_threshold:
 			_two_hand_heart_anchor = best_anchor
 			_two_hand_heart_release_since_ms = -1
 			gesture_updated.emit(
