@@ -219,23 +219,19 @@ texture = ExtResource("7_4c57u")
 expand_mode = 1
 stretch_mode = 5
 
-[node name="Rock" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction" unique_id=533869728]
+[node name="Rock" type="HBoxContainer" parent="Control/DrawInstructionLayer/DrawInstruction"]
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 14
 alignment = 1
 
-[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Rock" unique_id=991114874]
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/DrawInstruction/Rock"]
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.95)
-theme_override_constants/shadow_offset_x = 2
-theme_override_constants/shadow_offset_y = 2
 theme_override_font_sizes/font_size = 28
 text = "Gravité des dessins"
 vertical_alignment = 1
 
-[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Rock" unique_id=1369516670]
+[node name="Logo" type="TextureRect" parent="Control/DrawInstructionLayer/DrawInstruction/Rock"]
 custom_minimum_size = Vector2(36, 42)
 layout_mode = 2
 texture = ExtResource("9_vivmo")
@@ -288,6 +284,23 @@ layout_mode = 2
 texture = ExtResource("13_2cqfq")
 expand_mode = 1
 stretch_mode = 5
+
+[node name="GravityStatus" type="PanelContainer" parent="Control/DrawInstructionLayer" unique_id=1149468988]
+offset_left = 20.0
+offset_top = 86.0
+offset_right = 320.0
+offset_bottom = 113.0
+mouse_filter = 2
+
+[node name="Content" type="HBoxContainer" parent="Control/DrawInstructionLayer/GravityStatus" unique_id=596744279]
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="Label" type="Label" parent="Control/DrawInstructionLayer/GravityStatus/Content" unique_id=1380310229]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+vertical_alignment = 1
 
 [node name="AudioManager" type="Node" parent="Control" unique_id=2007512884]
 script = ExtResource("5_audio")

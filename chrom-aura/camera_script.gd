@@ -114,6 +114,7 @@ func _ready() -> void:
 		particles_layer.connect("GunShotFired", _on_gun_shot_fired)
 	if is_instance_valid(particles_layer) and particles_layer.has_signal("DrawingModeChanged"):
 		particles_layer.connect("DrawingModeChanged", _on_drawing_mode_changed)
+	_update_draw_instruction(false)
 	_update_body_debug_ui()
 
 	if _initialize_hand_landmarker():
@@ -533,7 +534,10 @@ func _update_draw_instruction(is_pointing: bool) -> void:
 		label_node = draw_instruction.get_node_or_null("HBoxContainer/Label") as Label
 	if is_instance_valid(label_node) and is_instance_valid(particles_layer) and "GravityEnabled" in particles_layer:
 		var is_physics: bool = bool(particles_layer.GravityEnabled)
-		label_node.text = "Dessinez (Gravité)" if is_physics else "Dessinez"
+		label_node.text = "Dessinez"
+		var instruction_layer := draw_instruction.get_parent()
+		if is_instance_valid(instruction_layer) and instruction_layer.has_method("set_gravity_status"):
+			instruction_layer.set_gravity_status(is_physics)
 
 
 func _on_depth_frame(image_texture: ImageTexture) -> void:
